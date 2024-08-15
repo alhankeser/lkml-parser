@@ -22,33 +22,72 @@ pub fn isValidKey(keyType: i8, needle: []const u8) bool {
     return false;
 }
 
-pub const Lkml = struct {
-    filepath: []const u8,
-    views: []View,
-    allocator: Allocator,
-    includes: [][]const u8,
+pub fn printList(items: [][]const u8) !void {
+    const count = items.len;
+    var i: i8 = 1;
+    print("\"includes\": [", .{ });
+    for (items) |item| {
+        print("\"{s}\"", .{item});
+        if (i < count) {
+            print(",", .{ });
+        }
+        i += 1;
+    }
+    print("], ", .{ });
+}
 
-    pub fn init (allocator: Allocator, filepath: []const u8) !Lkml {
+pub const Lkml = struct {
+    const Object = union(enum) {
+        view: View,
+        explore: Explore,
+    };
+    
+    allocator: Allocator,
+    filePath: []const u8,
+    includes: [][]const u8,
+    object: Object,
+    objects: []Object,
+
+    pub fn init(allocator: Allocator, filePath: []const u8, object: Object) !Lkml {
         return .{
             .allocator = allocator,
-            .filepath = filepath,
+            .filePath = filePath,
             .includes = try allocator.alloc([]const u8, 0),
-            .views = try allocator.alloc(View, 0),
+            .object = object,
+            .objects = try allocator.alloc(Object, 1),
         };
     }
 
-    pub fn add (self: Lkml, view: View) !Lkml {
-        const viewCount = self.views.len + 1;
-        var more = try self.allocator.alloc(View, viewCount);
-        std.mem.copyForwards(View, more[0..viewCount], self.views);
-        more[self.views.len] = view;
-        self.allocator.free(self.views);
-        return Lkml {
-            .allocator = self.allocator,
-            .filepath = self.filepath,
-            .includes = self.includes,
-            .views = more,
-        };
+    pub fn stringify(self: Lkml) void {
+        print("{{", .{ });
+        print("\"filepath\": \"{s}\", ", .{self.filePath});
+        try printList(self.includes);
+        switch (self.object) {
+            .view => print("\"views\": ", .{ }),
+            .explore => print("\"explore\": ", .{ }),
+        }
+        for (self.objects) |object| {
+            // print("{s}", .{object.name});
+            try object.view.stringify();
+        }
+    }
+
+    pub fn addInclude(self: *Lkml, include: []const u8) !void {
+        const includeCount = self.includes.len + 1;
+        var more = try self.allocator.alloc([]const u8, includeCount);
+        std.mem.copyForwards([]const u8, more[0..includeCount], self.includes);
+        more[self.includes.len] = include;
+        self.allocator.free(self.includes);
+        self.includes = more;
+    }
+
+    pub fn addObject(self: *Lkml, object: Object) !void {
+        const objectCount = self.objects.len + 1;
+        var more = try self.allocator.alloc([]self.object, objectCount);
+        std.mem.copyForwards([]self.object, more[0..objectCount], self.objects);
+        more[self.objects.len] = object;
+        self.allocator.free(self.objects);
+        self.objects = more;
     }
 };
 
@@ -66,7 +105,7 @@ pub const View = struct {
     derivedTable: DerivedTable,
 
 
-    pub fn init (allocator: Allocator, name: []const u8) !View {
+    pub fn init(allocator: Allocator, name: []const u8) !View {
         return .{
             .allocator = allocator,
             .name = name,
@@ -80,6 +119,14 @@ pub const View = struct {
             .requiredAccessGrants = try allocator.alloc([]const u8, 0),
             .derivedTable = try DerivedTable.init(allocator),
         };
+    }
+
+    pub fn stringify(self: View) !void {
+        print("{s}", .{self.name});
+    }
+
+    pub fn updateName(self: *View, name: []const u8) !void {
+        self.name = name;
     }
 };
 
@@ -139,6 +186,15 @@ pub const ExploreSource = struct {
     }
 };
 
+pub const Explore = struct {
+    name: []const u8,
+    pub fn init() !Explore {
+        return .{
+            .name = "hello",
+        };
+    }
+};
+
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -153,20 +209,22 @@ pub fn main() !void {
     const readBuf = try file.readToEndAlloc(allocator, fileSize);
     defer allocator.free(readBuf);
 
-    var lkml = try Lkml.init(allocator, filePath);
-
+    
     const orders = try View.init(allocator, "orders");
-    const customers = try View.init(allocator, "customers");
-    const products = try View.init(allocator, "products");
-    const pages = try View.init(allocator, "pages");
-    lkml = try lkml.add(orders);
-    lkml = try lkml.add(customers);
-    lkml = try lkml.add(products);
-    lkml = try lkml.add(pages);
+    // print("{s}", .{orders.name});
+    // try orders.updateName("orderz");
+    // print("{s}", .{orders.name});
+    // try orders.stringify();
+    var lkml = try Lkml.init(allocator, filePath, .{ .view = orders });
+    try lkml.addInclude("/base_views/orders.view.lkml");
+    try lkml.addInclude("/base_views/orders2.view.lkml");
+    try lkml.addObject(orders);
 
-    for (lkml.views) |view| {
-        print("{s}\n", .{view.name});
-    }
+    // lkml.stringify();
+
+    // for (lkml.objects) |object| {
+    //     print("{s}\n", .{object.view.name});
+    // }
 
     // var isComment = false;
     // var quotesOpen = false;
