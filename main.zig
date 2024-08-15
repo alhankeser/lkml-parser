@@ -25,69 +25,77 @@ pub fn isValidKey(keyType: i8, needle: []const u8) bool {
 pub fn printList(items: [][]const u8) !void {
     const count = items.len;
     var i: i8 = 1;
-    print("\"includes\": [", .{ });
+    print("[", .{ });
     for (items) |item| {
         print("\"{s}\"", .{item});
         if (i < count) {
-            print(",", .{ });
+            try printComma();
         }
         i += 1;
     }
-    print("], ", .{ });
+    print("] ", .{ });
+}
+
+pub fn printComma() !void {
+    print(", ", .{ });
+}
+
+pub fn getYesNo(boolean: bool) ![]const u8 {
+    return switch (boolean) {
+        true => "Yes",
+        false => "No"
+    };
 }
 
 pub const Lkml = struct {
-    const Object = union(enum) {
-        view: View,
-        explore: Explore,
-    };
-    
     allocator: Allocator,
+    objectType: []const u8,
     filePath: []const u8,
     includes: [][]const u8,
-    object: Object,
-    objects: []Object,
+    views: []View,
+    explores: []Explore,
 
-    pub fn init(allocator: Allocator, filePath: []const u8, object: Object) !Lkml {
+    pub fn init(allocator: Allocator, filePath: []const u8, objectType: []const u8) !Lkml {
         return .{
             .allocator = allocator,
+            .objectType = objectType,
             .filePath = filePath,
             .includes = try allocator.alloc([]const u8, 0),
-            .object = object,
-            .objects = try allocator.alloc(Object, 1),
+            .views = try allocator.alloc(View, 0),
+            .explores = try allocator.alloc(Explore, 0),
         };
     }
 
     pub fn stringify(self: Lkml) void {
         print("{{", .{ });
         print("\"filepath\": \"{s}\", ", .{self.filePath});
+        print("\"includes\": ", .{ });
         try printList(self.includes);
-        switch (self.object) {
-            .view => print("\"views\": ", .{ }),
-            .explore => print("\"explore\": ", .{ }),
+        try printComma();
+        print("\"views\": [", .{ });
+        for (self.views) |view| {
+            try view.stringify();
         }
-        for (self.objects) |object| {
-            // print("{s}", .{object.name});
-            try object.view.stringify();
-        }
+        print("]", .{ });
     }
 
     pub fn addInclude(self: *Lkml, include: []const u8) !void {
-        const includeCount = self.includes.len + 1;
-        var more = try self.allocator.alloc([]const u8, includeCount);
-        std.mem.copyForwards([]const u8, more[0..includeCount], self.includes);
-        more[self.includes.len] = include;
-        self.allocator.free(self.includes);
-        self.includes = more;
+        const T = @TypeOf(include);
+        self.includes = try self._add([]T, T, self.includes, include);
     }
 
-    pub fn addObject(self: *Lkml, object: Object) !void {
-        const objectCount = self.objects.len + 1;
-        var more = try self.allocator.alloc([]self.object, objectCount);
-        std.mem.copyForwards([]self.object, more[0..objectCount], self.objects);
-        more[self.objects.len] = object;
-        self.allocator.free(self.objects);
-        self.objects = more;
+    pub fn addView(self: *Lkml, view: View) !void {
+        const T = @TypeOf(view);
+        self.views = try self._add([]T, T, self.views, view);
+    }
+
+    pub fn _add(self: *Lkml, srcType: type, itemType: type, src: srcType, item: itemType) !srcType {
+        const count = src.len + 1;
+        var more = try self.allocator.alloc(itemType, count);
+        std.mem.copyForwards(itemType, more[0..count], src);
+        more[src.len] = item;
+        self.allocator.free(src);
+        return more;
     }
 };
 
@@ -96,11 +104,11 @@ pub const View = struct {
     name: []const u8,
     label: []const u8,
     extension: []const u8,
-    extends: [][]const u8,
     sqlTableName: []const u8,
     drillFields: []const u8,
-    fieldsHiddenByDefault: bool,
     suggestions: bool,
+    fieldsHiddenByDefault: bool,
+    extends: [][]const u8,
     requiredAccessGrants: [][]const u8,
     derivedTable: DerivedTable,
 
@@ -111,18 +119,32 @@ pub const View = struct {
             .name = name,
             .label = "",
             .extension = "",
-            .extends = try allocator.alloc([]const u8, 0),
             .sqlTableName = "",
             .drillFields = "",
-            .fieldsHiddenByDefault = false,
             .suggestions = true,
+            .fieldsHiddenByDefault = false,
+            .extends = try allocator.alloc([]const u8, 0),
             .requiredAccessGrants = try allocator.alloc([]const u8, 0),
             .derivedTable = try DerivedTable.init(allocator),
         };
     }
 
     pub fn stringify(self: View) !void {
-        print("{s}", .{self.name});
+        print("{{", .{ });
+        print("\"name\": \"{s}\",", .{self.name});
+        print("\"label\": \"{s}\",", .{self.label});
+        print("\"extension\": \"{s}\",", .{self.extension});
+        print("\"sql_table_name\": \"{s}\",", .{self.sqlTableName});
+        print("\"drill_fields\": \"{s}\",", .{self.drillFields});
+        print("\"suggestions\": \"{s}\",", .{try getYesNo(self.suggestions)});
+        print("\"fields_hidden_by_default\": \"{s}\",", .{try getYesNo(self.fieldsHiddenByDefault)});
+        print("\"extends\": ", .{ });
+        try printList(self.extends);
+        try printComma();
+        print("\"required_access_grants\": ", .{ });
+        try printList(self.requiredAccessGrants);
+        // try self.derivedTable.stringify();
+        print("}}", .{ });
     }
 
     pub fn updateName(self: *View, name: []const u8) !void {
@@ -178,6 +200,10 @@ pub const DerivedTable = struct {
             .tableFormat = "",
         };
     }
+
+    pub fn stringify() !void {
+        print("Derived Table", .{ });
+    }
 };
 
 pub const ExploreSource = struct {
@@ -215,12 +241,12 @@ pub fn main() !void {
     // try orders.updateName("orderz");
     // print("{s}", .{orders.name});
     // try orders.stringify();
-    var lkml = try Lkml.init(allocator, filePath, .{ .view = orders });
+    var lkml = try Lkml.init(allocator, filePath, "view");
     try lkml.addInclude("/base_views/orders.view.lkml");
     try lkml.addInclude("/base_views/orders2.view.lkml");
-    try lkml.addObject(orders);
+    try lkml.addView(orders);
 
-    // lkml.stringify();
+    lkml.stringify();
 
     // for (lkml.objects) |object| {
     //     print("{s}\n", .{object.view.name});
