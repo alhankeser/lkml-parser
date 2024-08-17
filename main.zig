@@ -237,6 +237,35 @@ pub const Explore = struct {
     }
 };
 
+pub const Parser = struct {
+    allocator: Allocator,
+    chars: []u8,
+
+    pub fn init(allocator: Allocator) !Parser {
+        return .{
+            .allocator = allocator,
+            .chars = &[_]u8{},
+        };
+    }
+
+    pub fn addChars(self: *Parser, char: u8) !void {
+        const size_needed = self.chars.len + 1;
+        const buffer = try self.allocator.alloc(u8, size_needed);
+        std.mem.copyForwards(u8, buffer[0..self.chars.len], self.chars);
+        buffer[self.chars.len] = char;
+        self.allocator.free(self.chars);
+        self.chars = buffer[0..size_needed];
+    }
+
+    pub fn stringify(self: *Parser) !void {
+        print("{s}", .{self.chars});
+    }
+};
+
+pub fn equalStrings(a: []const u8, b: []const u8) !bool {
+    return std.mem.eql(u8, a, b);
+}
+
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -251,134 +280,148 @@ pub fn main() !void {
     const readBuf = try file.readToEndAlloc(allocator, fileSize);
     defer allocator.free(readBuf);
 
+    // var parser = try Parser.init(allocator);
+
+    var chunks = std.mem.splitAny(u8, readBuf, ":");
+    // maybe split by {} as well?
+
+    while(chunks.next()) |chunk| {
+        print("{s}\n\n###\n\n", .{chunk});
+        if (try equalStrings("view", chunk)) {
+            print("{s}", .{"is view"});
+        }
+    }
+
+    // try parser.stringify();
+
     
     // const orders = try View.init(allocator, "orders");
     // const customers = try View.init(allocator, "customers");
-    var lkml = try Lkml.init(allocator, filePath);
+    // var lkml = try Lkml.init(allocator, filePath);
 
     
 
     // var isComment = false;
     // var quotesOpen = false;
-    var quoteChar: []const u8 = "\"";
+    // var quoteChar: []const u8 = "\"";
     // var isKey = true;
-    var isPreviousObjectKey = false;
-    var isInObject = false;
-    var isExpectingObjectClosing = false;
+    // var isPreviousObjectKey = false;
+    // const isInObject = false;
+    // var isExpectingObjectClosing = false;
 
-    var isPreviousFieldKey = false;
-    var isInField = false;
-    var isExpectingFieldClosing = false;
+    // // var isPreviousFieldKey = false;
+    // // var isInField = false;
+    // var isExpectingFieldClosing = false;
 
-    var isInParam: bool = false;
-    var isQuoteOpen: bool = false;
-    var isVariable: bool = false;
-    // var quoteChar: []const u8 = undefined;
-    var previousChar: []const u8 = undefined;
-    var it = std.mem.split(u8, readBuf, " ");
+    // // var isInParam: bool = false;
+    // // var isQuoteOpen: bool = false;
+    // // var isVariable: bool = false;
+    // // // var quoteChar: []const u8 = undefined;
+    // // var previousChar: []const u8 = undefined;
+    // var it = std.mem.split(u8, readBuf, " ");
     
-    while (it.next()) |word| {
+    // while (it.next()) |word| {
 
         // object
-        if (!isInObject and isValidKey("object", word)) {
-            // close object
-            if (isExpectingObjectClosing) {
-                isExpectingObjectClosing = false;
-                // print("{s}", .{"\n}"});
-            }
-            // print("\"{s}\": {{\n", .{word});
-            isPreviousObjectKey = true;
-            continue;
-        }
+        // if (!isInObject and isValidKey("object", word)) {
+        //     // close object
+        //     if (isExpectingObjectClosing) {
+        //         isExpectingObjectClosing = false;
+        //         // print("{s}", .{"\n}"});
+        //     }
+        //     // print("\"{s}\": {{\n", .{word});
+        //     isPreviousObjectKey = true;
+        //     continue;
+        // }
 
-        // field
-        if (isInObject and !isQuoteOpen and isValidKey("field", word)) {
-            if (isInParam) {
-                isInParam = false;
-                // print("\\{s},\n", .{"\""});
-            }
-            // close field
-            if (isExpectingFieldClosing) {
-                isExpectingFieldClosing = false;
-                // print("{s}", .{",\n"});
-            }
-            // print("  \"{s}\": {{\n", .{word});
-            isPreviousFieldKey = true;
-            continue;
-        }
+        // // field
+        // if (isInObject and !isQuoteOpen and isValidKey("field", word)) {
+        //     if (isInParam) {
+        //         isInParam = false;
+        //         // print("\\{s},\n", .{"\""});
+        //     }
+        //     // close field
+        //     if (isExpectingFieldClosing) {
+        //         isExpectingFieldClosing = false;
+        //         // print("{s}", .{",\n"});
+        //     }
+        //     // print("  \"{s}\": {{\n", .{word});
+        //     isPreviousFieldKey = true;
+        //     continue;
+        // }
 
-        // object name
-        if (isPreviousObjectKey) {
-            // print("  \"name\": \"{s}\",\n", .{word});
-            isPreviousObjectKey = false;
-            isExpectingObjectClosing = true;
-            isInObject = true;
-            continue;
-        }
+        // // object name
+        // if (isPreviousObjectKey) {
+        //     // print("  \"name\": \"{s}\",\n", .{word});
+        //     isPreviousObjectKey = false;
+        //     isExpectingObjectClosing = true;
+        //     isInObject = true;
+        //     continue;
+        // }
 
-        // field name
-        if (isPreviousFieldKey) {
-            // print("    \"name\": \"{s}\",\n", .{word});
-            isPreviousFieldKey = false;
-            isExpectingFieldClosing = true;
-            isInField = true;
-            continue;
-        }
+        // // field name
+        // if (isPreviousFieldKey) {
+        //     // print("    \"name\": \"{s}\",\n", .{word});
+        //     isPreviousFieldKey = false;
+        //     isExpectingFieldClosing = true;
+        //     isInField = true;
+        //     continue;
+        // }
 
-        // param
-        if (isInObject and isInField and !isQuoteOpen and isValidKey("param", word)) {
-            // if (isInParam) {
-            //     print("{s}", .{"\",\n"});
-            // }
-            // print("    \"{s}\": \"", .{word});
-            isInParam = true;
-            continue;
-        }
+        // // param
+        // if (isInObject and isInField and !isQuoteOpen and isValidKey("param", word)) {
+        //     // if (isInParam) {
+        //     //     print("{s}", .{"\",\n"});
+        //     // }
+        //     // print("    \"{s}\": \"", .{word});
+        //     isInParam = true;
+        //     continue;
+        // }
 
-        if (isInParam) {
-            var chars = std.mem.window(u8, word, 1, 1);
-            while (chars.next()) |char| {
-                if (std.mem.eql(u8, char, "'") or std.mem.eql(u8, char, "\"")) {
-                    if (!isQuoteOpen) {
-                        isQuoteOpen = true;
-                        quoteChar = char;
-                        // std.debug.print("\\{s}", .{quoteChar});
-                        continue;
-                    }
-                    if (isQuoteOpen and std.mem.eql(u8, char, quoteChar)) {
-                        isQuoteOpen = false;
-                        // std.debug.print("\\{s}", .{quoteChar});
-                        continue;
-                    }
-                }
-                // Close variable
-                if (isVariable and std.mem.eql(u8, char, "}")) {
-                    isVariable = false;
-                    continue;
-                }
-                // Open variable
-                if (!isVariable and std.mem.eql(u8, previousChar, "$") and std.mem.eql(u8, char, "{")) {
-                    isVariable = true;
-                }
-                // Quote final param value
-                if (isInParam and !isVariable and isExpectingFieldClosing and std.mem.eql(u8, char, "}")) {
-                    isInParam = false;
-                }
-                previousChar = char;
-                if (!isInParam) {
-                    break;
-                }
-            }
-        }
-    }
-    if (isExpectingFieldClosing) {
-        isExpectingFieldClosing = false;
-        // print("{s}", .{"\n  }"});
-    }
-    if (isExpectingObjectClosing) {
-        isExpectingObjectClosing = false;
-        // print("{s}", .{"\n}"});
-    }
+        // if (isInParam) {
+        //     var chars = std.mem.window(u8, word, 1, 1);
+        //     while (chars.next()) |char| {
+        //         if (std.mem.eql(u8, char, "'") or std.mem.eql(u8, char, "\"")) {
+        //             if (!isQuoteOpen) {
+        //                 isQuoteOpen = true;
+        //                 quoteChar = char;
+        //                 // std.debug.print("\\{s}", .{quoteChar});
+        //                 continue;
+        //             }
+        //             if (isQuoteOpen and std.mem.eql(u8, char, quoteChar)) {
+        //                 isQuoteOpen = false;
+        //                 // std.debug.print("\\{s}", .{quoteChar});
+        //                 continue;
+        //             }
+        //         }
+        //         // Close variable
+        //         if (isVariable and std.mem.eql(u8, char, "}")) {
+        //             isVariable = false;
+        //             continue;
+        //         }
+        //         // Open variable
+        //         if (!isVariable and std.mem.eql(u8, previousChar, "$") and std.mem.eql(u8, char, "{")) {
+        //             isVariable = true;
+        //         }
+        //         // Quote final param value
+        //         if (isInParam and !isVariable and isExpectingFieldClosing and std.mem.eql(u8, char, "}")) {
+        //             isInParam = false;
+        //         }
+        //         previousChar = char;
+        //         if (!isInParam) {
+        //             break;
+        //         }
+        //     }
+        // }
+    // }
+    // if (isExpectingFieldClosing) {
+    //     isExpectingFieldClosing = false;
+    //     // print("{s}", .{"\n  }"});
+    // }
+    // if (isExpectingObjectClosing) {
+    //     isExpectingObjectClosing = false;
+    //     // print("{s}", .{"\n}"});
+    // }
 
-    lkml.stringify();
+    // lkml.stringify();
 }
