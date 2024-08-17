@@ -7,11 +7,11 @@ const objectNames = [2][]const u8{ "view:", "explore:" };
 const fieldNames = [6][]const u8{ "filter:", "parameter:", "dimension:", "dimension_group:", "measure:", "set:" };
 const paramNames = [62][]const u8{ "action:", "alias:", "allow_approximate_optimization:", "allow_fill:", "allowed_value:", "alpha_sort:", "approximate:", "approximate_threshold:", "bypass_suggest_restrictions:", "can_filter:", "case:", "case_sensitive:", "convert_tz:", "datatype:", "default_value:", "description:", "direction:", "drill_fields:", "end_location_field:", "fanout_on:", "fields:", "filters:", "full_suggestions:", "group_item_label:", "group_label:", "hidden:", "html:", "intervals:", "label:", "label_from_parameter:", "link:", "list_field:", "map_layer_name:", "order_by_field:", "percentile:", "precision:", "primary_key:", "required_access_grants:", "required_fields:", "skip_drill_filter:", "sql:", "sql_distinct_key:", "sql_end:", "sql_latitude:", "sql_longitude:", "sql_start:", "start_location_field:", "string_datatype:", "style:", "suggest_dimension:", "suggest_explore:", "suggest_persist_for:", "suggestable:", "suggestions:", "tags:", "tiers:", "timeframes:", "type:", "units:", "value_format:", "value_format_name:", "view_labe:l" };
 
-pub fn isValidKey(keyType: i8, needle: []const u8) bool {
+pub fn isValidKey(keyType: []const u8, needle: []const u8) bool {
     const haystack: []const []const u8 = switch (keyType) {
-        0 => &objectNames,
-        1 => &fieldNames,
-        2 => &paramNames,
+        .object => &objectNames,
+        .field => &fieldNames,
+        .param => &paramNames,
         else => return false,
     };
     for (haystack) |thing| {
@@ -22,12 +22,26 @@ pub fn isValidKey(keyType: i8, needle: []const u8) bool {
     return false;
 }
 
-pub fn printList(items: [][]const u8) !void {
+pub fn printStrings(items: [][]const u8) !void {
     const count = items.len;
     var i: i8 = 1;
     print("[", .{ });
     for (items) |item| {
         print("\"{s}\"", .{item});
+        if (i < count) {
+            try printComma();
+        }
+        i += 1;
+    }
+    print("]", .{ });
+}
+
+pub fn printObjects(T: type, items: []T) !void {
+    const count = items.len;
+    var i: i8 = 1;
+    print("[", .{ });
+    for (items) |item| {
+        try item.stringify();
         if (i < count) {
             try printComma();
         }
@@ -49,16 +63,14 @@ pub fn getYesNo(boolean: bool) ![]const u8 {
 
 pub const Lkml = struct {
     allocator: Allocator,
-    objectType: []const u8,
     filePath: []const u8,
     includes: [][]const u8,
     views: []View,
     explores: []Explore,
 
-    pub fn init(allocator: Allocator, filePath: []const u8, objectType: []const u8) !Lkml {
+    pub fn init(allocator: Allocator, filePath: []const u8) !Lkml {
         return .{
             .allocator = allocator,
-            .objectType = objectType,
             .filePath = filePath,
             .includes = try allocator.alloc([]const u8, 0),
             .views = try allocator.alloc(View, 0),
@@ -67,29 +79,26 @@ pub const Lkml = struct {
     }
 
     pub fn stringify(self: Lkml) void {
-        print("{{", .{ });
+        try printComma();
         print("\"filepath\": \"{s}\", ", .{self.filePath});
         print("\"includes\": ", .{ });
-        try printList(self.includes);
+        try printStrings(self.includes);
         try printComma();
-        print("\"views\": [", .{ });
-        for (self.views) |view| {
-            try view.stringify();
-        }
-        print("]", .{ });
+        print("\"views\": ", .{ });
+        try printObjects(View, self.views);
     }
 
     pub fn addInclude(self: *Lkml, include: []const u8) !void {
         const T = @TypeOf(include);
-        self.includes = try self._add([]T, T, self.includes, include);
+        self.includes = try self.add([]T, T, self.includes, include);
     }
 
     pub fn addView(self: *Lkml, view: View) !void {
         const T = @TypeOf(view);
-        self.views = try self._add([]T, T, self.views, view);
+        self.views = try self.add([]T, T, self.views, view);
     }
 
-    pub fn _add(self: *Lkml, srcType: type, itemType: type, src: srcType, item: itemType) !srcType {
+    fn add(self: *Lkml, srcType: type, itemType: type, src: srcType, item: itemType) !srcType {
         const count = src.len + 1;
         var more = try self.allocator.alloc(itemType, count);
         std.mem.copyForwards(itemType, more[0..count], src);
@@ -131,18 +140,25 @@ pub const View = struct {
 
     pub fn stringify(self: View) !void {
         print("{{", .{ });
-        print("\"name\": \"{s}\",", .{self.name});
-        print("\"label\": \"{s}\",", .{self.label});
-        print("\"extension\": \"{s}\",", .{self.extension});
-        print("\"sql_table_name\": \"{s}\",", .{self.sqlTableName});
-        print("\"drill_fields\": \"{s}\",", .{self.drillFields});
-        print("\"suggestions\": \"{s}\",", .{try getYesNo(self.suggestions)});
-        print("\"fields_hidden_by_default\": \"{s}\",", .{try getYesNo(self.fieldsHiddenByDefault)});
+        print("\"name\": \"{s}\"", .{self.name});
+        try printComma();
+        print("\"label\": \"{s}\"", .{self.label});
+        try printComma();
+        print("\"extension\": \"{s}\"", .{self.extension});
+        try printComma();
+        print("\"sql_table_name\": \"{s}\"", .{self.sqlTableName});
+        try printComma();
+        print("\"drill_fields\": \"{s}\"", .{self.drillFields});
+        try printComma();
+        print("\"suggestions\": \"{s}\"", .{try getYesNo(self.suggestions)});
+        try printComma();
+        print("\"fields_hidden_by_default\": \"{s}\"", .{try getYesNo(self.fieldsHiddenByDefault)});
+        try printComma();
         print("\"extends\": ", .{ });
-        try printList(self.extends);
+        try printStrings(self.extends);
         try printComma();
         print("\"required_access_grants\": ", .{ });
-        try printList(self.requiredAccessGrants);
+        try printStrings(self.requiredAccessGrants);
         // try self.derivedTable.stringify();
         print("}}", .{ });
     }
@@ -236,148 +252,133 @@ pub fn main() !void {
     defer allocator.free(readBuf);
 
     
-    const orders = try View.init(allocator, "orders");
-    // print("{s}", .{orders.name});
-    // try orders.updateName("orderz");
-    // print("{s}", .{orders.name});
-    // try orders.stringify();
-    var lkml = try Lkml.init(allocator, filePath, "view");
-    try lkml.addInclude("/base_views/orders.view.lkml");
-    try lkml.addInclude("/base_views/orders2.view.lkml");
-    try lkml.addView(orders);
+    // const orders = try View.init(allocator, "orders");
+    // const customers = try View.init(allocator, "customers");
+    var lkml = try Lkml.init(allocator, filePath);
 
-    lkml.stringify();
-
-    // for (lkml.objects) |object| {
-    //     print("{s}\n", .{object.view.name});
-    // }
+    
 
     // var isComment = false;
     // var quotesOpen = false;
-    // var quoteChar: []const u8 = "\"";
+    var quoteChar: []const u8 = "\"";
     // var isKey = true;
-    // var isPreviousObjectKey = false;
-    // var isInObject = false;
-    // var isExpectingObjectClosing = false;
+    var isPreviousObjectKey = false;
+    var isInObject = false;
+    var isExpectingObjectClosing = false;
 
-    // var isPreviousFieldKey = false;
-    // var isInField = false;
-    // var isExpectingFieldClosing = false;
+    var isPreviousFieldKey = false;
+    var isInField = false;
+    var isExpectingFieldClosing = false;
 
-    // var isInParam: bool = false;
-    // var isQuoteOpen: bool = false;
-    // var isVariable: bool = false;
+    var isInParam: bool = false;
+    var isQuoteOpen: bool = false;
+    var isVariable: bool = false;
     // var quoteChar: []const u8 = undefined;
-    // var previousChar: []const u8 = undefined;
-    // var it = std.mem.split(u8, readBuf, " ");
-    // while (it.next()) |word| {
+    var previousChar: []const u8 = undefined;
+    var it = std.mem.split(u8, readBuf, " ");
+    
+    while (it.next()) |word| {
 
-    //     // object
-    //     if (!isInObject and isValidKey(0, word)) {
-    //         // close object
-    //         if (isExpectingObjectClosing) {
-    //             isExpectingObjectClosing = false;
-    //             print("{s}", .{"\n}"});
-    //         }
-    //         print("\"{s}\": {{\n", .{word});
-    //         isPreviousObjectKey = true;
-    //         continue;
-    //     }
+        // object
+        if (!isInObject and isValidKey("object", word)) {
+            // close object
+            if (isExpectingObjectClosing) {
+                isExpectingObjectClosing = false;
+                // print("{s}", .{"\n}"});
+            }
+            // print("\"{s}\": {{\n", .{word});
+            isPreviousObjectKey = true;
+            continue;
+        }
 
-    //     // field
-    //     if (isInObject and !isQuoteOpen and isValidKey(1, word)) {
-    //         if (isInParam) {
-    //             isInParam = false;
-    //             print("\\{s},\n", .{"\""});
-    //         }
-    //         // close field
-    //         if (isExpectingFieldClosing) {
-    //             isExpectingFieldClosing = false;
-    //             print("{s}", .{",\n"});
-    //         }
-    //         print("  \"{s}\": {{\n", .{word});
-    //         isPreviousFieldKey = true;
-    //         continue;
-    //     }
+        // field
+        if (isInObject and !isQuoteOpen and isValidKey("field", word)) {
+            if (isInParam) {
+                isInParam = false;
+                // print("\\{s},\n", .{"\""});
+            }
+            // close field
+            if (isExpectingFieldClosing) {
+                isExpectingFieldClosing = false;
+                // print("{s}", .{",\n"});
+            }
+            // print("  \"{s}\": {{\n", .{word});
+            isPreviousFieldKey = true;
+            continue;
+        }
 
-    //     // object name
-    //     if (isPreviousObjectKey) {
-    //         print("  \"name\": \"{s}\",\n", .{word});
-    //         isPreviousObjectKey = false;
-    //         isExpectingObjectClosing = true;
-    //         isInObject = true;
-    //         continue;
-    //     }
+        // object name
+        if (isPreviousObjectKey) {
+            // print("  \"name\": \"{s}\",\n", .{word});
+            isPreviousObjectKey = false;
+            isExpectingObjectClosing = true;
+            isInObject = true;
+            continue;
+        }
 
-    //     // field name
-    //     if (isPreviousFieldKey) {
-    //         print("    \"name\": \"{s}\",\n", .{word});
-    //         isPreviousFieldKey = false;
-    //         isExpectingFieldClosing = true;
-    //         isInField = true;
-    //         continue;
-    //     }
+        // field name
+        if (isPreviousFieldKey) {
+            // print("    \"name\": \"{s}\",\n", .{word});
+            isPreviousFieldKey = false;
+            isExpectingFieldClosing = true;
+            isInField = true;
+            continue;
+        }
 
-    //     // param
-    //     if (isInObject and isInField and !isQuoteOpen and isValidKey(2, word)) {
-    //         if (isInParam) {
-    //             print("{s}", .{"\",\n"});
-    //         }
-    //         print("    \"{s}\": \"", .{word});
-    //         isInParam = true;
-    //         continue;
-    //     }
+        // param
+        if (isInObject and isInField and !isQuoteOpen and isValidKey("param", word)) {
+            // if (isInParam) {
+            //     print("{s}", .{"\",\n"});
+            // }
+            // print("    \"{s}\": \"", .{word});
+            isInParam = true;
+            continue;
+        }
 
-    //     if (isInParam) {
-    //         var chars = std.mem.window(u8, word, 1, 1);
-    //         while (chars.next()) |char| {
-    //             if (std.mem.eql(u8, char, "'") or std.mem.eql(u8, char, "\"")) {
-    //                 if (!isQuoteOpen) {
-    //                     isQuoteOpen = true;
-    //                     quoteChar = char;
-    //                     std.debug.print("\\{s}", .{quoteChar});
-    //                     continue;
-    //                 }
-    //                 if (isQuoteOpen and std.mem.eql(u8, char, quoteChar)) {
-    //                     isQuoteOpen = false;
-    //                     std.debug.print("\\{s}", .{quoteChar});
-    //                     continue;
-    //                 }
-    //             }
-    //             // Close variable
-    //             if (isVariable and std.mem.eql(u8, char, "}")) {
-    //                 isVariable = false;
-    //                 print("{s}", .{char});
-    //                 continue;
-    //             }
-    //             // Open variable
-    //             if (!isVariable and std.mem.eql(u8, previousChar, "$") and std.mem.eql(u8, char, "{")) {
-    //                 isVariable = true;
-    //             }
-    //             // Quote final param value
-    //             if (isInParam and !isVariable and isExpectingFieldClosing and std.mem.eql(u8, char, "}")) {
-    //                 print("\"{s}", .{""});
-    //                 isInParam = false;
-    //             }
-    //             if (!std.mem.eql(u8, char, "\n")) {
-    //                 print("{s}", .{char});
-    //             }
-    //             previousChar = char;
-    //             if (!isInParam) {
-    //                 break;
-    //             }
-    //         }
-    //         if (!std.mem.eql(u8, previousChar, "}")) {
-    //             print("{s}", .{" "});
-    //         }
-    //     }
-    // }
-    // if (isExpectingFieldClosing) {
-    //     isExpectingFieldClosing = false;
-    //     // print("{s}", .{"\n  }"});
-    // }
-    // if (isExpectingObjectClosing) {
-    //     isExpectingObjectClosing = false;
-    //     print("{s}", .{"\n}"});
-    // }
+        if (isInParam) {
+            var chars = std.mem.window(u8, word, 1, 1);
+            while (chars.next()) |char| {
+                if (std.mem.eql(u8, char, "'") or std.mem.eql(u8, char, "\"")) {
+                    if (!isQuoteOpen) {
+                        isQuoteOpen = true;
+                        quoteChar = char;
+                        // std.debug.print("\\{s}", .{quoteChar});
+                        continue;
+                    }
+                    if (isQuoteOpen and std.mem.eql(u8, char, quoteChar)) {
+                        isQuoteOpen = false;
+                        // std.debug.print("\\{s}", .{quoteChar});
+                        continue;
+                    }
+                }
+                // Close variable
+                if (isVariable and std.mem.eql(u8, char, "}")) {
+                    isVariable = false;
+                    continue;
+                }
+                // Open variable
+                if (!isVariable and std.mem.eql(u8, previousChar, "$") and std.mem.eql(u8, char, "{")) {
+                    isVariable = true;
+                }
+                // Quote final param value
+                if (isInParam and !isVariable and isExpectingFieldClosing and std.mem.eql(u8, char, "}")) {
+                    isInParam = false;
+                }
+                previousChar = char;
+                if (!isInParam) {
+                    break;
+                }
+            }
+        }
+    }
+    if (isExpectingFieldClosing) {
+        isExpectingFieldClosing = false;
+        // print("{s}", .{"\n  }"});
+    }
+    if (isExpectingObjectClosing) {
+        isExpectingObjectClosing = false;
+        // print("{s}", .{"\n}"});
+    }
+
+    lkml.stringify();
 }
