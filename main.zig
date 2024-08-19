@@ -3,19 +3,13 @@ const Allocator = std.mem.Allocator;
 const stdout = std.io.getStdOut().writer();
 const print = std.debug.print;
 
-const objectNames = [2][]const u8{ "view:", "explore:" };
-const fieldNames = [6][]const u8{ "filter:", "parameter:", "dimension:", "dimension_group:", "measure:", "set:" };
-const paramNames = [62][]const u8{ "action:", "alias:", "allow_approximate_optimization:", "allow_fill:", "allowed_value:", "alpha_sort:", "approximate:", "approximate_threshold:", "bypass_suggest_restrictions:", "can_filter:", "case:", "case_sensitive:", "convert_tz:", "datatype:", "default_value:", "description:", "direction:", "drill_fields:", "end_location_field:", "fanout_on:", "fields:", "filters:", "full_suggestions:", "group_item_label:", "group_label:", "hidden:", "html:", "intervals:", "label:", "label_from_parameter:", "link:", "list_field:", "map_layer_name:", "order_by_field:", "percentile:", "precision:", "primary_key:", "required_access_grants:", "required_fields:", "skip_drill_filter:", "sql:", "sql_distinct_key:", "sql_end:", "sql_latitude:", "sql_longitude:", "sql_start:", "start_location_field:", "string_datatype:", "style:", "suggest_dimension:", "suggest_explore:", "suggest_persist_for:", "suggestable:", "suggestions:", "tags:", "tiers:", "timeframes:", "type:", "units:", "value_format:", "value_format_name:", "view_labe:l" };
+var lkmlParams = [_][]const u8{ "view:", "explore:", "include:", "extends:"};
+var viewParms =  [_][]const u8{ "label:", "extension:", "sql_table_name:", "drill_fields:", "suggestions:", "fields_hidden_by_default:", "extends:", "required_access_grants:", "derived_table:", "filter:", "parameter:", "dimension:", "dimension_group:", "measure:", "set:" };
+var paramNames = [_][]const u8{ "action:", "alias:", "allow_approximate_optimization:", "allow_fill:", "allowed_value:", "alpha_sort:", "approximate:", "approximate_threshold:", "bypass_suggest_restrictions:", "can_filter:", "case:", "case_sensitive:", "convert_tz:", "datatype:", "default_value:", "description:", "direction:", "drill_fields:", "end_location_field:", "fanout_on:", "fields:", "filters:", "full_suggestions:", "group_item_label:", "group_label:", "hidden:", "html:", "intervals:", "label:", "label_from_parameter:", "link:", "list_field:", "map_layer_name:", "order_by_field:", "percentile:", "precision:", "primary_key:", "required_access_grants:", "required_fields:", "skip_drill_filter:", "sql:", "sql_distinct_key:", "sql_end:", "sql_latitude:", "sql_longitude:", "sql_start:", "start_location_field:", "string_datatype:", "style:", "suggest_dimension:", "suggest_explore:", "suggest_persist_for:", "suggestable:", "suggestions:", "tags:", "tiers:", "timeframes:", "type:", "units:", "value_format:", "value_format_name:", "view_labe:" };
 
-pub fn isValidKey(keyType: []const u8, needle: []const u8) bool {
-    const haystack: []const []const u8 = switch (keyType) {
-        .object => &objectNames,
-        .field => &fieldNames,
-        .param => &paramNames,
-        else => return false,
-    };
+pub fn isValidKey(needle: []const u8, haystack: [][]const u8) bool {
     for (haystack) |thing| {
-        if (std.mem.eql(u8, needle, thing)) {
+        if (try equalStrings(needle, thing)) {
             return true;
         }
     }
@@ -25,7 +19,7 @@ pub fn isValidKey(keyType: []const u8, needle: []const u8) bool {
 pub fn printStrings(items: [][]const u8) !void {
     const count = items.len;
     var i: i8 = 1;
-    print("[", .{ });
+    print("[", .{});
     for (items) |item| {
         print("\"{s}\"", .{item});
         if (i < count) {
@@ -33,13 +27,13 @@ pub fn printStrings(items: [][]const u8) !void {
         }
         i += 1;
     }
-    print("]", .{ });
+    print("]", .{});
 }
 
 pub fn printObjects(T: type, items: []T) !void {
     const count = items.len;
     var i: i8 = 1;
-    print("[", .{ });
+    print("[", .{});
     for (items) |item| {
         try item.stringify();
         if (i < count) {
@@ -47,11 +41,11 @@ pub fn printObjects(T: type, items: []T) !void {
         }
         i += 1;
     }
-    print("] ", .{ });
+    print("] ", .{});
 }
 
 pub fn printComma() !void {
-    print(", ", .{ });
+    print(", ", .{});
 }
 
 pub fn getYesNo(boolean: bool) ![]const u8 {
@@ -59,6 +53,23 @@ pub fn getYesNo(boolean: bool) ![]const u8 {
         true => "Yes",
         false => "No"
     };
+}
+
+pub fn removeLeadingWhitespace(chars: []u8) []u8 {
+    var start: u16 = 0;
+    while (start < chars.len and (chars[start] == 32 or chars[start] == 10)) {
+        start += 1;
+    }
+    return chars[start..];
+}
+
+pub fn keyContainsSql(key: []u8) bool {
+    const index = std.mem.indexOf(u8, key, "sql");
+    if (index) |idx| {
+        _ = idx;
+        return true;
+    }
+    return false;
 }
 
 pub const Lkml = struct {
@@ -81,14 +92,14 @@ pub const Lkml = struct {
     pub fn stringify(self: Lkml) void {
         try printComma();
         print("\"filepath\": \"{s}\", ", .{self.filePath});
-        print("\"includes\": ", .{ });
+        print("\"includes\": ", .{});
         try printStrings(self.includes);
         try printComma();
-        print("\"views\": ", .{ });
+        print("\"views\": ", .{});
         try printObjects(View, self.views);
     }
 
-    pub fn addInclude(self: *Lkml, include: []const u8) !void {
+    pub fn addInclude(self: *Lkml, include: []const u8) void {
         const T = @TypeOf(include);
         self.includes = try self.add([]T, T, self.includes, include);
     }
@@ -139,7 +150,7 @@ pub const View = struct {
     }
 
     pub fn stringify(self: View) !void {
-        print("{{", .{ });
+        print("{{", .{});
         print("\"name\": \"{s}\"", .{self.name});
         try printComma();
         print("\"label\": \"{s}\"", .{self.label});
@@ -154,13 +165,13 @@ pub const View = struct {
         try printComma();
         print("\"fields_hidden_by_default\": \"{s}\"", .{try getYesNo(self.fieldsHiddenByDefault)});
         try printComma();
-        print("\"extends\": ", .{ });
+        print("\"extends\": ", .{});
         try printStrings(self.extends);
         try printComma();
-        print("\"required_access_grants\": ", .{ });
+        print("\"required_access_grants\": ", .{});
         try printStrings(self.requiredAccessGrants);
         // try self.derivedTable.stringify();
-        print("}}", .{ });
+        print("}}", .{});
     }
 
     pub fn updateName(self: *View, name: []const u8) !void {
@@ -218,7 +229,7 @@ pub const DerivedTable = struct {
     }
 
     pub fn stringify() !void {
-        print("Derived Table", .{ });
+        print("Derived Table", .{});
     }
 };
 
@@ -239,22 +250,184 @@ pub const Explore = struct {
 
 pub const Parser = struct {
     allocator: Allocator,
+    lkml: Lkml,
     chars: []u8,
+    totalChars: u32,
+    depth: i8,
+    isQuoted: bool,
+    isNonQuoted: bool,
+    isBrackets: bool,
+    isVariable: bool,
+    isValue: bool,
+    isSql: bool,
+    lastKey: []u8,
+    valueTerminatorChar: u8,
+    debug: bool,
 
-    pub fn init(allocator: Allocator) !Parser {
+    pub fn init(allocator: Allocator, lkml: Lkml) !Parser {
         return .{
             .allocator = allocator,
+            .lkml = lkml,
             .chars = &[_]u8{},
+            .totalChars = 0,
+            .depth = 0,
+            .isQuoted = false,
+            .isNonQuoted = false,
+            .isBrackets = false,
+            .isVariable = false,
+            .isValue = false,
+            .isSql = false,
+            .lastKey = &[_]u8{},
+            .valueTerminatorChar = 0,
+            .debug = false,
         };
     }
 
-    pub fn addChars(self: *Parser, char: u8) !void {
+    pub fn addChar(self: *Parser, char: u8) !void {
         const size_needed = self.chars.len + 1;
         const buffer = try self.allocator.alloc(u8, size_needed);
         std.mem.copyForwards(u8, buffer[0..self.chars.len], self.chars);
         buffer[self.chars.len] = char;
         self.allocator.free(self.chars);
         self.chars = buffer[0..size_needed];
+        self.totalChars += 1;
+        try self.updateState(char);
+        const printBuff: [1]u8 = [_]u8{char};
+        print("{s}", .{printBuff});
+    }
+
+    pub fn updateState(self: *Parser, char: u8) !void {
+        // list item
+        if (self.isBrackets and char == 44) {
+            print("<list-item-end>", .{});
+        }
+        // value close
+        if (self.isValue and (
+            (
+                !self.isSql 
+                and self.valueTerminatorChar == char
+            ) 
+            or (
+                self.chars.len > 1 
+                and self.isSql 
+                and self.valueTerminatorChar == char
+                and self.chars[self.chars.len-1] == self.valueTerminatorChar
+            )
+            or (
+                self.chars.len > 1 
+                and self.isNonQuoted 
+                and (self.valueTerminatorChar == char or char == 10)
+            ))) {
+            
+            // brackets close
+            if (self.isBrackets) {
+                self.isBrackets = false;
+                print("<list-end>", .{});
+            }
+            // sql close
+            if (self.isSql) {
+                self.isSql = false;
+                print("<sql-end>", .{});
+            }
+            // quotes close
+            if (self.isQuoted) {
+                self.isQuoted = false;
+                print("<quotes-end>", .{});
+            }
+            // non quoted close
+            if (self.isNonQuoted) {
+                self.isNonQuoted = false;
+                print("<nonquoted-end>", .{});
+            }
+            // reset the rest
+            self.isValue = false;
+            self.valueTerminatorChar = 0;
+            self.chars = &[_]u8{};
+            print("<keyvalue-end:{any}>", .{self.depth});
+            return;
+        }
+        if (!self.isQuoted and !self.isBrackets and !self.isNonQuoted and !self.isSql) {
+            // key
+            if (!self.isValue and char == 58 and (self.chars[0] == 32 or self.chars[0] == 10 or self.chars.len == self.totalChars)) {
+                const key = removeLeadingWhitespace(self.chars[0..]);
+                if (self.depth == 0 and isValidKey(key, &lkmlParams)) {
+                    print("<keyvalue-start:{any}>", .{self.depth});
+                    self.lastKey = key;
+                }
+                if (self.depth == 1 and isValidKey(key, &viewParms)) {
+                    print("<keyvalue-start:{any}>", .{self.depth});
+                    self.lastKey = key;
+                }
+                if (self.depth == 2 and isValidKey(key, &paramNames)) {
+                    print("<keyvalue-start:{any}>", .{self.depth});
+                    self.lastKey = key;
+                }
+                self.isValue = true;
+                self.chars = &[_]u8{};
+                return;
+            }
+
+            // brackets open
+            if (char == 91) {
+                self.isBrackets = true;
+                self.valueTerminatorChar = 93;
+                self.chars = &[_]u8{};
+                print("<list-start>", .{});
+                return;
+            }
+            
+            // quotes open
+            if (char == 34 or char == 39) {
+                self.valueTerminatorChar = char;
+                self.isQuoted = true;
+                print("<quotes-start>", .{});
+                return;
+            }
+
+            // curly braces open
+            if (char == 123) {
+                if (self.isValue) {
+                    self.isValue = false;                    
+                    print("<keyvalue-end:{any}>", .{self.depth});
+                }
+                self.depth += 1;
+                if (!self.isVariable) {
+                    print("<depth-start:{any}>", .{self.depth});
+                }
+                if (self.chars.len > 1 and self.chars[self.chars.len-1] == 36) {
+                    self.isVariable = true;
+                }
+                self.chars = &[_]u8{};
+                return;
+            }
+
+            // curly braces close
+            if (char == 125) {
+                if (!self.isVariable) {
+                    print("<depth-end:{any}>", .{self.depth});
+                }
+                self.depth -= 1;
+                if (self.isVariable) {
+                    self.isVariable = false;
+                }
+                self.chars = &[_]u8{};
+                return;
+            }
+
+            // first char of value is not quote or bracket
+            if (self.isValue and char != 32) {
+                self.isSql = keyContainsSql(self.lastKey);
+                if (self.isSql) {
+                    self.valueTerminatorChar = 59;
+                    print("<sql-start>", .{});
+                } else {
+                    self.isNonQuoted = true;
+                    self.valueTerminatorChar = 32;
+                    print("<nonquoted-start>", .{});
+                }
+                return;
+            }
+        }
     }
 
     pub fn stringify(self: *Parser) !void {
@@ -280,24 +453,23 @@ pub fn main() !void {
     const readBuf = try file.readToEndAlloc(allocator, fileSize);
     defer allocator.free(readBuf);
 
-    // var parser = try Parser.init(allocator);
+    var lkml = try Lkml.init(allocator, filePath);
+    var parser = try Parser.init(allocator, lkml);
+    var chars = std.mem.window(u8, readBuf, 1, 1);
 
-    var chunks = std.mem.splitAny(u8, readBuf, ":");
-    // maybe split by {} as well?
-
-    while(chunks.next()) |chunk| {
-        print("{s}\n\n###\n\n", .{chunk});
-        if (try equalStrings("view", chunk)) {
-            print("{s}", .{"is view"});
-        }
+    while (chars.next()) |char| {
+        try parser.addChar(char[0]);
     }
+
+    lkml.stringify();
+    
 
     // try parser.stringify();
 
     
     // const orders = try View.init(allocator, "orders");
     // const customers = try View.init(allocator, "customers");
-    // var lkml = try Lkml.init(allocator, filePath);
+    
 
     
 
