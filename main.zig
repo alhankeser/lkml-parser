@@ -3,13 +3,13 @@ const Allocator = std.mem.Allocator;
 const stdout = std.io.getStdOut().writer();
 const print = std.debug.print;
 
-var lkmlParams = [_][]const u8{ "view:", "explore:", "include:", "extends:"};
-var viewParms =  [_][]const u8{ "label:", "extension:", "sql_table_name:", "drill_fields:", "suggestions:", "fields_hidden_by_default:", "extends:", "required_access_grants:", "derived_table:", "filter:", "parameter:", "dimension:", "dimension_group:", "measure:", "set:" };
+var lkmlParams = [_][]const u8{ "view:", "explore:", "include:", "extends:" };
+var viewParms = [_][]const u8{ "label:", "extension:", "sql_table_name:", "drill_fields:", "suggestions:", "fields_hidden_by_default:", "extends:", "required_access_grants:", "derived_table:", "filter:", "parameter:", "dimension:", "dimension_group:", "measure:", "set:" };
 var paramNames = [_][]const u8{ "action:", "alias:", "allow_approximate_optimization:", "allow_fill:", "allowed_value:", "alpha_sort:", "approximate:", "approximate_threshold:", "bypass_suggest_restrictions:", "can_filter:", "case:", "case_sensitive:", "convert_tz:", "datatype:", "default_value:", "description:", "direction:", "drill_fields:", "end_location_field:", "fanout_on:", "fields:", "filters:", "full_suggestions:", "group_item_label:", "group_label:", "hidden:", "html:", "intervals:", "label:", "label_from_parameter:", "link:", "list_field:", "map_layer_name:", "order_by_field:", "percentile:", "precision:", "primary_key:", "required_access_grants:", "required_fields:", "skip_drill_filter:", "sql:", "sql_distinct_key:", "sql_end:", "sql_latitude:", "sql_longitude:", "sql_start:", "start_location_field:", "string_datatype:", "style:", "suggest_dimension:", "suggest_explore:", "suggest_persist_for:", "suggestable:", "suggestions:", "tags:", "tiers:", "timeframes:", "type:", "units:", "value_format:", "value_format_name:", "view_label:" };
 
 pub fn isValidKey(needle: []const u8, haystack: [][]const u8) bool {
     for (haystack) |thing| {
-        if (try equalStrings(needle, thing)) {
+        if (equalStrings(needle, thing)) {
             return true;
         }
     }
@@ -51,16 +51,23 @@ pub fn printComma() !void {
 pub fn getYesNo(boolean: bool) ![]const u8 {
     return switch (boolean) {
         true => "Yes",
-        false => "No"
+        false => "No",
     };
 }
 
-pub fn removeLeadingWhitespace(chars: []u8) []u8 {
+pub fn trim(T: type, chars: T) T {
+    if (chars.len == 0) {
+        return chars;
+    }
     var start: u16 = 0;
+    var end = chars.len - 1;
     while (start < chars.len and (chars[start] == 32 or chars[start] == 10)) {
         start += 1;
     }
-    return chars[start..];
+    while (end > 0 and end > start and (chars[end] == 32 or chars[end] == 10)) {
+        end -= 1;
+    }
+    return chars[start .. end + 1];
 }
 
 pub fn keyContainsSql(key: []u8) bool {
@@ -99,7 +106,7 @@ pub const Lkml = struct {
         try printObjects(View, self.views);
     }
 
-    pub fn addInclude(self: *Lkml, include: []const u8) void {
+    pub fn addInclude(self: *Lkml, include: []const u8) !void {
         const T = @TypeOf(include);
         self.includes = try self.add([]T, T, self.includes, include);
     }
@@ -131,7 +138,6 @@ pub const View = struct {
     extends: [][]const u8,
     requiredAccessGrants: [][]const u8,
     derivedTable: DerivedTable,
-
 
     pub fn init(allocator: Allocator, name: []const u8) !View {
         return .{
@@ -250,7 +256,6 @@ pub const Explore = struct {
 
 pub const Parser = struct {
     allocator: Allocator,
-    lkml: Lkml,
     chars: []u8,
     totalChars: u32,
     depth: i8,
@@ -264,10 +269,9 @@ pub const Parser = struct {
     valueTerminatorChar: u8,
     output: []u8,
 
-    pub fn init(allocator: Allocator, lkml: Lkml) !Parser {
+    pub fn init(allocator: Allocator) !Parser {
         return .{
             .allocator = allocator,
-            .lkml = lkml,
             .chars = &[_]u8{},
             .totalChars = 0,
             .depth = 0,
@@ -302,9 +306,16 @@ pub const Parser = struct {
         self.output = buffer;
     }
 
+    pub fn removeOutputLastChars(self: *Parser, charCount: u16) void {
+        if (self.output.len > charCount) {
+            const newLen = self.output.len - charCount;
+            self.output = self.output[0..newLen];
+        }
+    }
+
     pub fn parse(self: *Parser, char: u8) !void {
         try self.addChar(char);
-        const charString:[1]u8= [1]u8{char};
+        const charString: [1]u8 = [1]u8{char};
         var printBuff = try std.fmt.allocPrint(self.allocator, "{s}", .{charString});
         try self.addOutput(printBuff[0..]);
         // list item
@@ -314,22 +325,15 @@ pub const Parser = struct {
         }
         // value close
         if (self.isValue and (
-            (
-                !self.isSql 
+            (!self.isSql and self.valueTerminatorChar == char)
+            or (self.chars.len > 1
+                and self.isSql
                 and self.valueTerminatorChar == char
-            ) 
-            or (
-                self.chars.len > 1 
-                and self.isSql 
-                and self.valueTerminatorChar == char
-                and self.chars[self.chars.len-2] == self.valueTerminatorChar
-            )
-            or (
-                self.chars.len > 1 
-                and self.isNonQuoted 
-                and (self.valueTerminatorChar == char or char == 10)
-            ))) {
-            
+                and self.chars[self.chars.len - 2] == self.valueTerminatorChar)
+            or (self.chars.len > 1
+                and self.isNonQuoted
+                and (self.valueTerminatorChar == char or char == 10)))) {
+
             // brackets close
             if (self.isBrackets) {
                 self.isBrackets = false;
@@ -359,26 +363,26 @@ pub const Parser = struct {
             self.isValue = false;
             self.valueTerminatorChar = 0;
             self.chars = &[_]u8{};
-            printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-end:{any}>", .{self.depth});
+            printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-end>", .{});
             try self.addOutput(printBuff[0..]);
             return;
         }
         if (!self.isQuoted and !self.isBrackets and !self.isNonQuoted and !self.isSql) {
             // key
             if (!self.isValue and char == 58 and (self.chars[0] == 32 or self.chars[0] == 10 or self.chars.len == self.totalChars)) {
-                const key = removeLeadingWhitespace(self.chars[0..]);
+                const key = trim([]u8, self.chars[0..]);
                 if (self.depth == 0 and isValidKey(key, &lkmlParams)) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start:{any}>", .{self.depth});
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start>", .{});
                     try self.addOutput(printBuff[0..]);
                     self.lastKey = key;
                 }
                 if (self.depth == 1 and isValidKey(key, &viewParms)) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start:{any}>", .{self.depth});
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start>", .{});
                     try self.addOutput(printBuff[0..]);
                     self.lastKey = key;
                 }
                 if (self.depth == 2 and isValidKey(key, &paramNames)) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start:{any}>", .{self.depth});
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start>", .{});
                     try self.addOutput(printBuff[0..]);
                     self.lastKey = key;
                 }
@@ -392,33 +396,34 @@ pub const Parser = struct {
                 self.isBrackets = true;
                 self.valueTerminatorChar = 93;
                 self.chars = &[_]u8{};
-                printBuff = try std.fmt.allocPrint(self.allocator, "<list-start>", .{});
-                try self.addOutput(printBuff[0..]);
+                // printBuff = try std.fmt.allocPrint(self.allocator, "<list-start>", .{});
+                // try self.addOutput(printBuff[0..]);
                 return;
             }
-            
+
             // quotes open
             if (char == 34 or char == 39) {
                 self.valueTerminatorChar = char;
                 self.isQuoted = true;
-                printBuff = try std.fmt.allocPrint(self.allocator, "<quotes-start>", .{});
-                try self.addOutput(printBuff[0..]);
+                // printBuff = try std.fmt.allocPrint(self.allocator, "<quotes-start>", .{});
+                // try self.addOutput(printBuff[0..]);
                 return;
             }
 
             // curly braces open
             if (char == 123) {
+                self.removeOutputLastChars(1);
                 if (self.isValue) {
-                    self.isValue = false;                    
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-end:{any}>", .{self.depth});
+                    self.isValue = false;
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<nested-value><keyvalue-end>", .{});
                     try self.addOutput(printBuff[0..]);
                 }
                 self.depth += 1;
                 if (!self.isVariable) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<depth-start:{any}>", .{self.depth});
-                    try self.addOutput(printBuff[0..]);
+                    // printBuff = try std.fmt.allocPrint(self.allocator, "<depth:{any}>", .{self.depth});
+                    // try self.addOutput(printBuff[0..]);
                 }
-                if (self.chars.len > 1 and self.chars[self.chars.len-2] == 36) {
+                if (self.chars.len > 1 and self.chars[self.chars.len - 2] == 36) {
                     self.isVariable = true;
                 }
                 self.chars = &[_]u8{};
@@ -427,9 +432,14 @@ pub const Parser = struct {
 
             // curly braces close
             if (char == 125) {
+                self.removeOutputLastChars(1);
                 if (!self.isVariable) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<depth-start:{}>", .{self.depth});
-                    try self.addOutput(printBuff[0..]);
+                    // printBuff = try std.fmt.allocPrint(self.allocator, "<depth:{any}>", .{self.depth});
+                    // try self.addOutput(printBuff[0..]);
+                    if (self.isValue) {
+                        printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-end>", .{});
+                        try self.addOutput(printBuff[0..]);
+                    }
                 }
                 self.depth -= 1;
                 if (self.isVariable) {
@@ -444,13 +454,13 @@ pub const Parser = struct {
                 self.isSql = keyContainsSql(self.lastKey);
                 if (self.isSql) {
                     self.valueTerminatorChar = 59;
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<sql-start>", .{});
-                    try self.addOutput(printBuff[0..]);
+                    // printBuff = try std.fmt.allocPrint(self.allocator, "<sql-start>", .{});
+                    // try self.addOutput(printBuff[0..]);
                 } else {
                     self.isNonQuoted = true;
                     self.valueTerminatorChar = 32;
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<nonquoted-start>", .{});
-                    try self.addOutput(printBuff[0..]);
+                    // printBuff = try std.fmt.allocPrint(self.allocator, "<nonquoted-start>", .{});
+                    // try self.addOutput(printBuff[0..]);
                 }
                 return;
             }
@@ -462,8 +472,12 @@ pub const Parser = struct {
     }
 };
 
-pub fn equalStrings(a: []const u8, b: []const u8) !bool {
+pub fn equalStrings(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
+}
+
+pub fn cleanVal(parsedVal: []const u8) []const u8 {
+    return parsedVal;
 }
 
 pub fn main() !void {
@@ -481,28 +495,52 @@ pub fn main() !void {
     defer allocator.free(readBuf);
 
     var lkml = try Lkml.init(allocator, filePath);
-    var parser = try Parser.init(allocator, lkml);
+    var parser = try Parser.init(allocator);
     var chars = std.mem.window(u8, readBuf, 1, 1);
 
     while (chars.next()) |char| {
         try parser.parse(char[0]);
     }
 
-    try parser.stringify();
-    
-    lkml.stringify();
-
-
-    
-
-    // try parser.stringify();
+    const parsed = parser.output;
+    var key: []const u8 = &[_]u8{};
+    var val: []const u8 = &[_]u8{};
+    var view: View = undefined;
+    // var func: fn([]const u8) void = undefined;
 
     
-    // const orders = try View.init(allocator, "orders");
-    // const customers = try View.init(allocator, "customers");
-    
+    var keyValueEndSplit = std.mem.splitSequence(u8, parsed, "<keyvalue-end>");
+    while (keyValueEndSplit.next()) |keyValueEndToken| {
+        var keyValueStartSplit = std.mem.splitSequence(u8, keyValueEndToken, "<keyvalue-start>");
+        while (keyValueStartSplit.next()) |token| {
+            
+            if (key.len == 0) {
+                key = trim([]const u8, token);
+                continue;
+            } else {
+                val = trim([]const u8, token);
+            }
+            if (key.len > 0 and val.len > 0) {
+                print("key:{s}|val:{s}/////\n\n", .{key, val});
+                if (equalStrings(key, "include:")) {
+                    try lkml.addInclude(val);
+                }
+                if (equalStrings(key, "view:")) {
+                    var viewNameSplit = std.mem.splitSequence(u8, val, "<nonquoted-end>");
+                    while (viewNameSplit.next()) | viewName| {
+                        view = try View.init(allocator, trim([]const u8,viewName));
+                        break;
+                    }
+                    try lkml.addView(view);
+                }
+                key = &[_]u8{};
+                val = &[_]u8{};
+            }
+        }
+    }
 
-    
+    // print("{s}", .{parsed});
 
     // lkml.stringify();
+
 }
