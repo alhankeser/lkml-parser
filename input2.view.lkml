@@ -15,6 +15,10 @@ view: orders {
     sql: select *
       from mytable
       ${asdfasfd}
+
+
+
+      
       ;;
   }
 
@@ -22,7 +26,8 @@ view: orders {
     label: "hello"
     sql: something ${asdfasfd}
       with a dimension: wrong" in it 
-      and ' also a view: fail ';;
+      and ' also a view: fail ' 
+      ;;
     type: string
   }
 

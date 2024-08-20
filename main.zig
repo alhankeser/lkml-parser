@@ -5,7 +5,7 @@ const print = std.debug.print;
 
 var lkmlParams = [_][]const u8{ "view:", "explore:", "include:", "extends:"};
 var viewParms =  [_][]const u8{ "label:", "extension:", "sql_table_name:", "drill_fields:", "suggestions:", "fields_hidden_by_default:", "extends:", "required_access_grants:", "derived_table:", "filter:", "parameter:", "dimension:", "dimension_group:", "measure:", "set:" };
-var paramNames = [_][]const u8{ "action:", "alias:", "allow_approximate_optimization:", "allow_fill:", "allowed_value:", "alpha_sort:", "approximate:", "approximate_threshold:", "bypass_suggest_restrictions:", "can_filter:", "case:", "case_sensitive:", "convert_tz:", "datatype:", "default_value:", "description:", "direction:", "drill_fields:", "end_location_field:", "fanout_on:", "fields:", "filters:", "full_suggestions:", "group_item_label:", "group_label:", "hidden:", "html:", "intervals:", "label:", "label_from_parameter:", "link:", "list_field:", "map_layer_name:", "order_by_field:", "percentile:", "precision:", "primary_key:", "required_access_grants:", "required_fields:", "skip_drill_filter:", "sql:", "sql_distinct_key:", "sql_end:", "sql_latitude:", "sql_longitude:", "sql_start:", "start_location_field:", "string_datatype:", "style:", "suggest_dimension:", "suggest_explore:", "suggest_persist_for:", "suggestable:", "suggestions:", "tags:", "tiers:", "timeframes:", "type:", "units:", "value_format:", "value_format_name:", "view_labe:" };
+var paramNames = [_][]const u8{ "action:", "alias:", "allow_approximate_optimization:", "allow_fill:", "allowed_value:", "alpha_sort:", "approximate:", "approximate_threshold:", "bypass_suggest_restrictions:", "can_filter:", "case:", "case_sensitive:", "convert_tz:", "datatype:", "default_value:", "description:", "direction:", "drill_fields:", "end_location_field:", "fanout_on:", "fields:", "filters:", "full_suggestions:", "group_item_label:", "group_label:", "hidden:", "html:", "intervals:", "label:", "label_from_parameter:", "link:", "list_field:", "map_layer_name:", "order_by_field:", "percentile:", "precision:", "primary_key:", "required_access_grants:", "required_fields:", "skip_drill_filter:", "sql:", "sql_distinct_key:", "sql_end:", "sql_latitude:", "sql_longitude:", "sql_start:", "start_location_field:", "string_datatype:", "style:", "suggest_dimension:", "suggest_explore:", "suggest_persist_for:", "suggestable:", "suggestions:", "tags:", "tiers:", "timeframes:", "type:", "units:", "value_format:", "value_format_name:", "view_label:" };
 
 pub fn isValidKey(needle: []const u8, haystack: [][]const u8) bool {
     for (haystack) |thing| {
@@ -262,7 +262,7 @@ pub const Parser = struct {
     isSql: bool,
     lastKey: []u8,
     valueTerminatorChar: u8,
-    debug: bool,
+    output: []u8,
 
     pub fn init(allocator: Allocator, lkml: Lkml) !Parser {
         return .{
@@ -279,7 +279,7 @@ pub const Parser = struct {
             .isSql = false,
             .lastKey = &[_]u8{},
             .valueTerminatorChar = 0,
-            .debug = false,
+            .output = &[_]u8{}
         };
     }
 
@@ -291,15 +291,26 @@ pub const Parser = struct {
         self.allocator.free(self.chars);
         self.chars = buffer[0..size_needed];
         self.totalChars += 1;
-        try self.updateState(char);
-        const printBuff: [1]u8 = [_]u8{char};
-        print("{s}", .{printBuff});
     }
 
-    pub fn updateState(self: *Parser, char: u8) !void {
+    pub fn addOutput(self: *Parser, chars: []u8) !void {
+        const size_needed = self.output.len + chars.len;
+        const buffer = try self.allocator.alloc(u8, size_needed);
+        std.mem.copyForwards(u8, buffer[0..self.output.len], self.output);
+        std.mem.copyForwards(u8, buffer[self.output.len..size_needed], chars);
+        self.allocator.free(self.output);
+        self.output = buffer;
+    }
+
+    pub fn parse(self: *Parser, char: u8) !void {
+        try self.addChar(char);
+        const charString:[1]u8= [1]u8{char};
+        var printBuff = try std.fmt.allocPrint(self.allocator, "{s}", .{charString});
+        try self.addOutput(printBuff[0..]);
         // list item
         if (self.isBrackets and char == 44) {
-            print("<list-item-end>", .{});
+            printBuff = try std.fmt.allocPrint(self.allocator, "<list-item-end>", .{});
+            try self.addOutput(printBuff[0..]);
         }
         // value close
         if (self.isValue and (
@@ -311,7 +322,7 @@ pub const Parser = struct {
                 self.chars.len > 1 
                 and self.isSql 
                 and self.valueTerminatorChar == char
-                and self.chars[self.chars.len-1] == self.valueTerminatorChar
+                and self.chars[self.chars.len-2] == self.valueTerminatorChar
             )
             or (
                 self.chars.len > 1 
@@ -322,28 +333,34 @@ pub const Parser = struct {
             // brackets close
             if (self.isBrackets) {
                 self.isBrackets = false;
-                print("<list-end>", .{});
+                printBuff = try std.fmt.allocPrint(self.allocator, "<list-end>", .{});
+                try self.addOutput(printBuff[0..]);
             }
             // sql close
             if (self.isSql) {
                 self.isSql = false;
-                print("<sql-end>", .{});
+                printBuff = try std.fmt.allocPrint(self.allocator, "<sql-end>", .{});
+                try self.addOutput(printBuff[0..]);
             }
             // quotes close
             if (self.isQuoted) {
                 self.isQuoted = false;
-                print("<quotes-end>", .{});
+                printBuff = try std.fmt.allocPrint(self.allocator, "<quotes-end>", .{});
+                try self.addOutput(printBuff[0..]);
             }
             // non quoted close
             if (self.isNonQuoted) {
                 self.isNonQuoted = false;
-                print("<nonquoted-end>", .{});
+                printBuff = try std.fmt.allocPrint(self.allocator, "<nonquoted-end>", .{});
+                try self.addOutput(printBuff[0..]);
             }
             // reset the rest
+            self.lastKey = &[_]u8{};
             self.isValue = false;
             self.valueTerminatorChar = 0;
             self.chars = &[_]u8{};
-            print("<keyvalue-end:{any}>", .{self.depth});
+            printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-end:{any}>", .{self.depth});
+            try self.addOutput(printBuff[0..]);
             return;
         }
         if (!self.isQuoted and !self.isBrackets and !self.isNonQuoted and !self.isSql) {
@@ -351,15 +368,18 @@ pub const Parser = struct {
             if (!self.isValue and char == 58 and (self.chars[0] == 32 or self.chars[0] == 10 or self.chars.len == self.totalChars)) {
                 const key = removeLeadingWhitespace(self.chars[0..]);
                 if (self.depth == 0 and isValidKey(key, &lkmlParams)) {
-                    print("<keyvalue-start:{any}>", .{self.depth});
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start:{any}>", .{self.depth});
+                    try self.addOutput(printBuff[0..]);
                     self.lastKey = key;
                 }
                 if (self.depth == 1 and isValidKey(key, &viewParms)) {
-                    print("<keyvalue-start:{any}>", .{self.depth});
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start:{any}>", .{self.depth});
+                    try self.addOutput(printBuff[0..]);
                     self.lastKey = key;
                 }
                 if (self.depth == 2 and isValidKey(key, &paramNames)) {
-                    print("<keyvalue-start:{any}>", .{self.depth});
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start:{any}>", .{self.depth});
+                    try self.addOutput(printBuff[0..]);
                     self.lastKey = key;
                 }
                 self.isValue = true;
@@ -372,7 +392,8 @@ pub const Parser = struct {
                 self.isBrackets = true;
                 self.valueTerminatorChar = 93;
                 self.chars = &[_]u8{};
-                print("<list-start>", .{});
+                printBuff = try std.fmt.allocPrint(self.allocator, "<list-start>", .{});
+                try self.addOutput(printBuff[0..]);
                 return;
             }
             
@@ -380,7 +401,8 @@ pub const Parser = struct {
             if (char == 34 or char == 39) {
                 self.valueTerminatorChar = char;
                 self.isQuoted = true;
-                print("<quotes-start>", .{});
+                printBuff = try std.fmt.allocPrint(self.allocator, "<quotes-start>", .{});
+                try self.addOutput(printBuff[0..]);
                 return;
             }
 
@@ -388,13 +410,15 @@ pub const Parser = struct {
             if (char == 123) {
                 if (self.isValue) {
                     self.isValue = false;                    
-                    print("<keyvalue-end:{any}>", .{self.depth});
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-end:{any}>", .{self.depth});
+                    try self.addOutput(printBuff[0..]);
                 }
                 self.depth += 1;
                 if (!self.isVariable) {
-                    print("<depth-start:{any}>", .{self.depth});
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<depth-start:{any}>", .{self.depth});
+                    try self.addOutput(printBuff[0..]);
                 }
-                if (self.chars.len > 1 and self.chars[self.chars.len-1] == 36) {
+                if (self.chars.len > 1 and self.chars[self.chars.len-2] == 36) {
                     self.isVariable = true;
                 }
                 self.chars = &[_]u8{};
@@ -404,7 +428,8 @@ pub const Parser = struct {
             // curly braces close
             if (char == 125) {
                 if (!self.isVariable) {
-                    print("<depth-end:{any}>", .{self.depth});
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<depth-start:{}>", .{self.depth});
+                    try self.addOutput(printBuff[0..]);
                 }
                 self.depth -= 1;
                 if (self.isVariable) {
@@ -419,11 +444,13 @@ pub const Parser = struct {
                 self.isSql = keyContainsSql(self.lastKey);
                 if (self.isSql) {
                     self.valueTerminatorChar = 59;
-                    print("<sql-start>", .{});
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<sql-start>", .{});
+                    try self.addOutput(printBuff[0..]);
                 } else {
                     self.isNonQuoted = true;
                     self.valueTerminatorChar = 32;
-                    print("<nonquoted-start>", .{});
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<nonquoted-start>", .{});
+                    try self.addOutput(printBuff[0..]);
                 }
                 return;
             }
@@ -431,7 +458,7 @@ pub const Parser = struct {
     }
 
     pub fn stringify(self: *Parser) !void {
-        print("{s}", .{self.chars});
+        print("{s}", .{self.output});
     }
 };
 
@@ -458,10 +485,14 @@ pub fn main() !void {
     var chars = std.mem.window(u8, readBuf, 1, 1);
 
     while (chars.next()) |char| {
-        try parser.addChar(char[0]);
+        try parser.parse(char[0]);
     }
 
+    try parser.stringify();
+    
     lkml.stringify();
+
+
     
 
     // try parser.stringify();
@@ -472,128 +503,6 @@ pub fn main() !void {
     
 
     
-
-    // var isComment = false;
-    // var quotesOpen = false;
-    // var quoteChar: []const u8 = "\"";
-    // var isKey = true;
-    // var isPreviousObjectKey = false;
-    // const isInObject = false;
-    // var isExpectingObjectClosing = false;
-
-    // // var isPreviousFieldKey = false;
-    // // var isInField = false;
-    // var isExpectingFieldClosing = false;
-
-    // // var isInParam: bool = false;
-    // // var isQuoteOpen: bool = false;
-    // // var isVariable: bool = false;
-    // // // var quoteChar: []const u8 = undefined;
-    // // var previousChar: []const u8 = undefined;
-    // var it = std.mem.split(u8, readBuf, " ");
-    
-    // while (it.next()) |word| {
-
-        // object
-        // if (!isInObject and isValidKey("object", word)) {
-        //     // close object
-        //     if (isExpectingObjectClosing) {
-        //         isExpectingObjectClosing = false;
-        //         // print("{s}", .{"\n}"});
-        //     }
-        //     // print("\"{s}\": {{\n", .{word});
-        //     isPreviousObjectKey = true;
-        //     continue;
-        // }
-
-        // // field
-        // if (isInObject and !isQuoteOpen and isValidKey("field", word)) {
-        //     if (isInParam) {
-        //         isInParam = false;
-        //         // print("\\{s},\n", .{"\""});
-        //     }
-        //     // close field
-        //     if (isExpectingFieldClosing) {
-        //         isExpectingFieldClosing = false;
-        //         // print("{s}", .{",\n"});
-        //     }
-        //     // print("  \"{s}\": {{\n", .{word});
-        //     isPreviousFieldKey = true;
-        //     continue;
-        // }
-
-        // // object name
-        // if (isPreviousObjectKey) {
-        //     // print("  \"name\": \"{s}\",\n", .{word});
-        //     isPreviousObjectKey = false;
-        //     isExpectingObjectClosing = true;
-        //     isInObject = true;
-        //     continue;
-        // }
-
-        // // field name
-        // if (isPreviousFieldKey) {
-        //     // print("    \"name\": \"{s}\",\n", .{word});
-        //     isPreviousFieldKey = false;
-        //     isExpectingFieldClosing = true;
-        //     isInField = true;
-        //     continue;
-        // }
-
-        // // param
-        // if (isInObject and isInField and !isQuoteOpen and isValidKey("param", word)) {
-        //     // if (isInParam) {
-        //     //     print("{s}", .{"\",\n"});
-        //     // }
-        //     // print("    \"{s}\": \"", .{word});
-        //     isInParam = true;
-        //     continue;
-        // }
-
-        // if (isInParam) {
-        //     var chars = std.mem.window(u8, word, 1, 1);
-        //     while (chars.next()) |char| {
-        //         if (std.mem.eql(u8, char, "'") or std.mem.eql(u8, char, "\"")) {
-        //             if (!isQuoteOpen) {
-        //                 isQuoteOpen = true;
-        //                 quoteChar = char;
-        //                 // std.debug.print("\\{s}", .{quoteChar});
-        //                 continue;
-        //             }
-        //             if (isQuoteOpen and std.mem.eql(u8, char, quoteChar)) {
-        //                 isQuoteOpen = false;
-        //                 // std.debug.print("\\{s}", .{quoteChar});
-        //                 continue;
-        //             }
-        //         }
-        //         // Close variable
-        //         if (isVariable and std.mem.eql(u8, char, "}")) {
-        //             isVariable = false;
-        //             continue;
-        //         }
-        //         // Open variable
-        //         if (!isVariable and std.mem.eql(u8, previousChar, "$") and std.mem.eql(u8, char, "{")) {
-        //             isVariable = true;
-        //         }
-        //         // Quote final param value
-        //         if (isInParam and !isVariable and isExpectingFieldClosing and std.mem.eql(u8, char, "}")) {
-        //             isInParam = false;
-        //         }
-        //         previousChar = char;
-        //         if (!isInParam) {
-        //             break;
-        //         }
-        //     }
-        // }
-    // }
-    // if (isExpectingFieldClosing) {
-    //     isExpectingFieldClosing = false;
-    //     // print("{s}", .{"\n  }"});
-    // }
-    // if (isExpectingObjectClosing) {
-    //     isExpectingObjectClosing = false;
-    //     // print("{s}", .{"\n}"});
-    // }
 
     // lkml.stringify();
 }
