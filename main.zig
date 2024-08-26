@@ -3,8 +3,27 @@ const Allocator = std.mem.Allocator;
 const stdout = std.io.getStdOut().writer();
 const print = std.debug.print;
 
+const keyValueDelimiter = "|||";
+
+const LkmlObject = union(enum) {
+    lkml: Lkml,
+    view: View,
+    explore: Explore,
+};
+
+pub const AddItemReturnType = struct{
+    name: []const u8,
+    object: LkmlObject
+};
+
+pub const DepthLookup = enum(u2) {
+    Zero = 0,
+    One = 1,
+    Two = 2,
+};
+
 var lkmlParams = [_][]const u8{ "view:", "explore:", "include:", "extends:" };
-var viewParms = [_][]const u8{ "label:", "extension:", "sql_table_name:", "drill_fields:", "suggestions:", "fields_hidden_by_default:", "extends:", "required_access_grants:", "derived_table:", "filter:", "parameter:", "dimension:", "dimension_group:", "measure:", "set:" };
+var viewParams = [_][]const u8{ "label:", "extension:", "sql_table_name:", "drill_fields:", "suggestions:", "fields_hidden_by_default:", "extends:", "required_access_grants:", "derived_table:", "filter:", "parameter:", "dimension:", "dimension_group:", "measure:", "set:" };
 var paramNames = [_][]const u8{ "action:", "alias:", "allow_approximate_optimization:", "allow_fill:", "allowed_value:", "alpha_sort:", "approximate:", "approximate_threshold:", "bypass_suggest_restrictions:", "can_filter:", "case:", "case_sensitive:", "convert_tz:", "datatype:", "default_value:", "description:", "direction:", "drill_fields:", "end_location_field:", "fanout_on:", "fields:", "filters:", "full_suggestions:", "group_item_label:", "group_label:", "hidden:", "html:", "intervals:", "label:", "label_from_parameter:", "link:", "list_field:", "map_layer_name:", "order_by_field:", "percentile:", "precision:", "primary_key:", "required_access_grants:", "required_fields:", "skip_drill_filter:", "sql:", "sql_distinct_key:", "sql_end:", "sql_latitude:", "sql_longitude:", "sql_start:", "start_location_field:", "string_datatype:", "style:", "suggest_dimension:", "suggest_explore:", "suggest_persist_for:", "suggestable:", "suggestions:", "tags:", "tiers:", "timeframes:", "type:", "units:", "value_format:", "value_format_name:", "view_label:" };
 
 pub fn isValidKey(needle: []const u8, haystack: [][]const u8) bool {
@@ -80,11 +99,21 @@ pub fn keyContainsSql(key: []u8) bool {
 }
 
 pub const Lkml = struct {
+    pub const Depth = enum { Zero, One, Two };
     allocator: Allocator,
     filePath: []const u8,
     includes: [][]const u8,
     views: []View,
     explores: []Explore,
+    depth: Depth,
+    currentObject: union(Depth) {
+        Zero: Lkml,
+        One: union {
+            View: View,
+            Explore: Explore,
+        },
+        Two: Field,
+    },
 
     pub fn init(allocator: Allocator, filePath: []const u8) !Lkml {
         return .{
@@ -116,6 +145,33 @@ pub const Lkml = struct {
         self.views = try self.add([]T, T, self.views, view);
     }
 
+    pub fn addExplore(self: *Lkml, explore: Explore) !void {
+        const T = @TypeOf(explore);
+        self.explores = try self.add([]T, T, self.explores, explore);
+    }
+
+    pub fn addItem(self: *Lkml, currentObjectType: []const u8, currentObject: LkmlObject, key: []const u8, val: []const u8) !AddItemReturnType {
+        var objectType = currentObjectType;
+        var object = currentObject;
+        if (equalStrings(key, "include:")) {
+            try self.addInclude(val);
+        }
+        if (equalStrings(key, "view:")) {
+            const view = try View.init(self.allocator, val);
+            try self.addView(view);
+            objectType = "view";
+            object = LkmlObject{.view = view};
+        }
+        if (equalStrings(key, "explore:")) {
+            const explore = try Explore.init(self.allocator, val);
+            try self.addExplore(explore);
+            objectType = "explore";
+            object = LkmlObject{.explore = explore};
+        }
+        const result = AddItemReturnType{.name = objectType, .object = object};
+        return result;
+    }
+
     fn add(self: *Lkml, srcType: type, itemType: type, src: srcType, item: itemType) !srcType {
         const count = src.len + 1;
         var more = try self.allocator.alloc(itemType, count);
@@ -138,6 +194,15 @@ pub const View = struct {
     extends: [][]const u8,
     requiredAccessGrants: [][]const u8,
     derivedTable: DerivedTable,
+
+    pub const StringAttribute = enum {
+        Name,
+        Label,
+        Description,
+        Extension,
+        SqlTableName,
+        DrillFields,
+    };
 
     pub fn init(allocator: Allocator, name: []const u8) !View {
         return .{
@@ -180,8 +245,24 @@ pub const View = struct {
         print("}}", .{});
     }
 
-    pub fn updateName(self: *View, name: []const u8) !void {
-        self.name = name;
+    pub fn setStringAttribute(self: *View, attribute: StringAttribute, val: []const u8) !void {
+        switch (attribute) {
+            .Name => self.name = val,
+            .Label => self.label = val,
+            .Description => self.description = val,
+            .Extension => self.Extension = val,
+            .SqlTableName => self.SqlTableName = val,
+            .DrillFields => self.DrillFields = val,
+        }
+    }
+
+    fn add(self: *Lkml, srcType: type, itemType: type, src: srcType, item: itemType) !srcType {
+        const count = src.len + 1;
+        var more = try self.allocator.alloc(itemType, count);
+        std.mem.copyForwards(itemType, more[0..count], src);
+        more[src.len] = item;
+        self.allocator.free(src);
+        return more;
     }
 };
 
@@ -245,11 +326,20 @@ pub const ExploreSource = struct {
     }
 };
 
+pub const Field = struct {
+    pub fn init() !Field {
+        return .{};
+    }
+};
+
 pub const Explore = struct {
+    allocator: Allocator,
     name: []const u8,
-    pub fn init() !Explore {
+
+    pub fn init(allocator: Allocator, name: []const u8) !Explore {
         return .{
-            .name = "hello",
+            .allocator = allocator,
+            .name = name,
         };
     }
 };
@@ -288,20 +378,29 @@ pub const Parser = struct {
     }
 
     pub fn addChar(self: *Parser, char: u8) !void {
-        const size_needed = self.chars.len + 1;
-        const buffer = try self.allocator.alloc(u8, size_needed);
+        const sizeNeeded = self.chars.len + 1;
+        const buffer = try self.allocator.alloc(u8, sizeNeeded);
         std.mem.copyForwards(u8, buffer[0..self.chars.len], self.chars);
         buffer[self.chars.len] = char;
         self.allocator.free(self.chars);
-        self.chars = buffer[0..size_needed];
+        self.chars = buffer[0..sizeNeeded];
         self.totalChars += 1;
     }
 
-    pub fn addOutput(self: *Parser, chars: []u8) !void {
-        const size_needed = self.output.len + chars.len;
-        const buffer = try self.allocator.alloc(u8, size_needed);
-        std.mem.copyForwards(u8, buffer[0..self.output.len], self.output);
-        std.mem.copyForwards(u8, buffer[self.output.len..size_needed], chars);
+    pub fn addOutput(self: *Parser, chars: []u8, offset: usize) !void {
+        const totalSize = self.output.len + chars.len;
+        const buffer = try self.allocator.alloc(u8, totalSize);
+        var safeOffset = offset;
+        if (safeOffset > self.output.len) {
+            safeOffset = self.output.len;
+        }
+        const outputPreEndIndex = self.output.len - safeOffset;
+        const charsEndIndex = outputPreEndIndex + chars.len;
+        const outputPre = self.output[0..outputPreEndIndex];
+        const outputPost = self.output[outputPreEndIndex..];
+        std.mem.copyForwards(u8, buffer[0..outputPreEndIndex], outputPre);
+        std.mem.copyForwards(u8, buffer[charsEndIndex..], outputPost);
+        std.mem.copyForwards(u8, buffer[outputPreEndIndex..charsEndIndex], chars);
         self.allocator.free(self.output);
         self.output = buffer;
     }
@@ -314,14 +413,18 @@ pub const Parser = struct {
     }
 
     pub fn parse(self: *Parser, char: u8) !void {
+        if (self.output.len == 0) {
+            var printBuff = try std.fmt.allocPrint(self.allocator, "<depth-start:{any}>", .{self.depth});
+            try self.addOutput(printBuff[0..], 0);
+        }
         try self.addChar(char);
         const charString: [1]u8 = [1]u8{char};
         var printBuff = try std.fmt.allocPrint(self.allocator, "{s}", .{charString});
-        try self.addOutput(printBuff[0..]);
+        try self.addOutput(printBuff[0..], 0);
         // list item
         if (self.isBrackets and char == 44) {
             printBuff = try std.fmt.allocPrint(self.allocator, "<list-item-end>", .{});
-            try self.addOutput(printBuff[0..]);
+            try self.addOutput(printBuff[0..], 0);
         }
         // value close
         if (self.isValue and (
@@ -338,33 +441,33 @@ pub const Parser = struct {
             if (self.isBrackets) {
                 self.isBrackets = false;
                 printBuff = try std.fmt.allocPrint(self.allocator, "<list-end>", .{});
-                try self.addOutput(printBuff[0..]);
+                try self.addOutput(printBuff[0..], 0);
             }
             // sql close
             if (self.isSql) {
                 self.isSql = false;
-                printBuff = try std.fmt.allocPrint(self.allocator, "<sql-end>", .{});
-                try self.addOutput(printBuff[0..]);
+                // printBuff = try std.fmt.allocPrint(self.allocator, "<sql-end>", .{});
+                // try self.addOutput(printBuff[0..], 0);
             }
             // quotes close
             if (self.isQuoted) {
                 self.isQuoted = false;
-                printBuff = try std.fmt.allocPrint(self.allocator, "<quotes-end>", .{});
-                try self.addOutput(printBuff[0..]);
+                // printBuff = try std.fmt.allocPrint(self.allocator, "<quotes-end>", .{});
+                // try self.addOutput(printBuff[0..], 0);
             }
             // non quoted close
             if (self.isNonQuoted) {
                 self.isNonQuoted = false;
-                printBuff = try std.fmt.allocPrint(self.allocator, "<nonquoted-end>", .{});
-                try self.addOutput(printBuff[0..]);
+                // printBuff = try std.fmt.allocPrint(self.allocator, "<nonquoted-end>", .{});
+                // try self.addOutput(printBuff[0..], 0);
             }
             // reset the rest
             self.lastKey = &[_]u8{};
             self.isValue = false;
             self.valueTerminatorChar = 0;
             self.chars = &[_]u8{};
-            printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-end>", .{});
-            try self.addOutput(printBuff[0..]);
+            printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-end:{any}>", .{self.depth});
+            try self.addOutput(printBuff[0..], 0);
             return;
         }
         if (!self.isQuoted and !self.isBrackets and !self.isNonQuoted and !self.isSql) {
@@ -372,20 +475,27 @@ pub const Parser = struct {
             if (!self.isValue and char == 58 and (self.chars[0] == 32 or self.chars[0] == 10 or self.chars.len == self.totalChars)) {
                 const key = trim([]u8, self.chars[0..]);
                 if (self.depth == 0 and isValidKey(key, &lkmlParams)) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start>", .{});
-                    try self.addOutput(printBuff[0..]);
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start:{any}>", .{self.depth});
+                    try self.addOutput(printBuff[0..], key.len);
+                    printBuff = try std.fmt.allocPrint(self.allocator, keyValueDelimiter, .{});
+                    try self.addOutput(printBuff, 1);
                     self.lastKey = key;
                 }
-                if (self.depth == 1 and isValidKey(key, &viewParms)) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start>", .{});
-                    try self.addOutput(printBuff[0..]);
+                if (self.depth == 1 and isValidKey(key, &viewParams)) {
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start:{any}>", .{self.depth});
+                    try self.addOutput(printBuff[0..], key.len);
+                    printBuff = try std.fmt.allocPrint(self.allocator, keyValueDelimiter, .{});
+                    try self.addOutput(printBuff, 1);
                     self.lastKey = key;
                 }
                 if (self.depth == 2 and isValidKey(key, &paramNames)) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start>", .{});
-                    try self.addOutput(printBuff[0..]);
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start:{any}>", .{self.depth});
+                    try self.addOutput(printBuff[0..], key.len);
+                    printBuff = try std.fmt.allocPrint(self.allocator, keyValueDelimiter, .{});
+                    try self.addOutput(printBuff, 1);
                     self.lastKey = key;
                 }
+                self.removeOutputLastChars(1);
                 self.isValue = true;
                 self.chars = &[_]u8{};
                 return;
@@ -397,7 +507,7 @@ pub const Parser = struct {
                 self.valueTerminatorChar = 93;
                 self.chars = &[_]u8{};
                 // printBuff = try std.fmt.allocPrint(self.allocator, "<list-start>", .{});
-                // try self.addOutput(printBuff[0..]);
+                // try self.addOutput(printBuff[0..], 0);
                 return;
             }
 
@@ -406,7 +516,7 @@ pub const Parser = struct {
                 self.valueTerminatorChar = char;
                 self.isQuoted = true;
                 // printBuff = try std.fmt.allocPrint(self.allocator, "<quotes-start>", .{});
-                // try self.addOutput(printBuff[0..]);
+                // try self.addOutput(printBuff[0..], 0);
                 return;
             }
 
@@ -415,13 +525,17 @@ pub const Parser = struct {
                 self.removeOutputLastChars(1);
                 if (self.isValue) {
                     self.isValue = false;
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<nested-value><keyvalue-end>", .{});
-                    try self.addOutput(printBuff[0..]);
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<nested-value><keyvalue-end:{any}>", .{self.depth});
+                    try self.addOutput(printBuff[0..], 0);
                 }
+                // if (!self.isVariable and self.depth == 0) {
+                //     printBuff = try std.fmt.allocPrint(self.allocator, "<depth-end:{any}>", .{self.depth});
+                //     try self.addOutput(printBuff[0..], 0);
+                // }
                 self.depth += 1;
                 if (!self.isVariable) {
-                    // printBuff = try std.fmt.allocPrint(self.allocator, "<depth:{any}>", .{self.depth});
-                    // try self.addOutput(printBuff[0..]);
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<depth-end:{any}><depth-start:{any}>", .{self.depth-1, self.depth});
+                    try self.addOutput(printBuff[0..], 0);
                 }
                 if (self.chars.len > 1 and self.chars[self.chars.len - 2] == 36) {
                     self.isVariable = true;
@@ -434,14 +548,18 @@ pub const Parser = struct {
             if (char == 125) {
                 self.removeOutputLastChars(1);
                 if (!self.isVariable) {
-                    // printBuff = try std.fmt.allocPrint(self.allocator, "<depth:{any}>", .{self.depth});
-                    // try self.addOutput(printBuff[0..]);
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<depth-end:{any}>", .{self.depth});
+                    try self.addOutput(printBuff[0..], 0);
                     if (self.isValue) {
-                        printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-end>", .{});
-                        try self.addOutput(printBuff[0..]);
+                        printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-end:{any}>", .{self.depth});
+                        try self.addOutput(printBuff[0..], 0);
                     }
                 }
                 self.depth -= 1;
+                if (!self.isVariable and self.depth == 0) {
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<depth-start:{any}>", .{self.depth});
+                    try self.addOutput(printBuff[0..], 0);
+                }
                 if (self.isVariable) {
                     self.isVariable = false;
                 }
@@ -455,16 +573,21 @@ pub const Parser = struct {
                 if (self.isSql) {
                     self.valueTerminatorChar = 59;
                     // printBuff = try std.fmt.allocPrint(self.allocator, "<sql-start>", .{});
-                    // try self.addOutput(printBuff[0..]);
+                    // try self.addOutput(printBuff[0..], 0);
                 } else {
                     self.isNonQuoted = true;
                     self.valueTerminatorChar = 32;
                     // printBuff = try std.fmt.allocPrint(self.allocator, "<nonquoted-start>", .{});
-                    // try self.addOutput(printBuff[0..]);
+                    // try self.addOutput(printBuff[0..], 0);
                 }
                 return;
             }
         }
+    }
+
+    pub fn finish(self: *Parser) !void {
+        var printBuff = try std.fmt.allocPrint(self.allocator, "<depth-end:{any}>", .{self.depth});
+        try self.addOutput(printBuff[0..], 0);
     }
 
     pub fn stringify(self: *Parser) !void {
@@ -478,6 +601,65 @@ pub fn equalStrings(a: []const u8, b: []const u8) bool {
 
 pub fn cleanVal(parsedVal: []const u8) []const u8 {
     return parsedVal;
+}
+
+pub const KeyValue = struct{
+    depth: u8,
+    key: []const u8,
+    val: []const u8,
+};
+
+pub fn getKeyValue(allocator: Allocator, depth: u8, text: []const u8) !KeyValue {
+    var keyValue: KeyValue = undefined;
+    const keyvalSplitIndexOptional = std.mem.indexOfPos(u8, text, 0, keyValueDelimiter);
+    const keyvalEndDelimiter = try std.fmt.allocPrint(allocator, "<keyvalue-end:{any}>", .{depth});
+    if (keyvalSplitIndexOptional) |keyvalSplitIndex| {
+        const key = trim([]const u8, text[0..keyvalSplitIndex]);
+        const keyvalEndIndexOptional = std.mem.indexOfPos(u8, text, 0, keyvalEndDelimiter);
+        if (keyvalEndIndexOptional) |keyvalEndIndex| {
+            const val = trim([]const u8, text[keyvalSplitIndex + keyValueDelimiter.len..keyvalEndIndex]);
+            keyValue = KeyValue{.depth = depth, .key = key, .val = val};
+        }
+        print("depth:{any}\nkey:{s}\nval:{s}\n\n", .{keyValue.depth, keyValue.key, keyValue.val});
+    }
+    return keyValue;
+}
+
+pub fn getKeyValues(allocator: Allocator, text: []u8, depth: u8) ![]KeyValue {
+    const depthStartKey = try std.fmt.allocPrint(allocator, "<depth-start:{any}>", .{depth});
+    const depthStopKey = try std.fmt.allocPrint(allocator, "<depth-end:{any}>", .{depth});
+    const depthStartIndexOptional = std.mem.indexOfPos(u8, text, 0, depthStartKey);
+    const depthStopIndexOptional = std.mem.indexOfPos(u8, text, 0, depthStopKey);
+    var keyValuesList = std.ArrayList(KeyValue).init(allocator);
+    defer keyValuesList.deinit();
+    if (depthStartIndexOptional) |depthStartIndex| {
+        if (depthStopIndexOptional) |depthStopIndex| {
+            const keyValueStartDelimiter = try std.fmt.allocPrint(allocator, "<keyvalue-start:{any}>", .{depth});
+            var keyValueTextSplit = std.mem.splitSequence(u8, text[depthStartIndex + depthStartKey.len..depthStopIndex], keyValueStartDelimiter);
+            while (keyValueTextSplit.next()) |keyValueText| {
+                const keyval = try getKeyValue(allocator, depth, keyValueText);
+                try keyValuesList.append(keyval);
+            }
+            // subArray = subArray[depthStopIndex+depthStopKey.len..];
+            // depthStartIndexOptional = std.mem.indexOfPos(u8, subArray, 0, depthStartKey);
+            // depthStopIndexOptional = std.mem.indexOfPos(u8, subArray, 0, depthStopKey);
+        }
+    }
+    // depthStartIndexOptional = std.mem.indexOfPos(u8, subArray, 0, depthStartKey);
+    return keyValuesList.items;
+}
+
+pub fn getAllKeyValues(allocator: Allocator, text: []u8) !void {
+    var depth: u8 = 0;
+    const subArray = text[0..];
+    // var depthStartKey = try std.fmt.allocPrint(allocator, "<depth-start:{any}>", .{depth});
+    // var depthStopKey = try std.fmt.allocPrint(allocator, "<depth-end:{any}>", .{depth});
+    // var depthStartIndexOptional = std.mem.indexOfPos(u8, text, 0, depthStartKey);
+    // var depthStopIndexOptional = std.mem.indexOfPos(u8, text, 0, depthStopKey);
+    while (depth < 3) {
+        _ = try getKeyValuesByDepth(allocator, subArray, depth);
+        depth += 1;
+    }
 }
 
 pub fn main() !void {
@@ -494,53 +676,44 @@ pub fn main() !void {
     const readBuf = try file.readToEndAlloc(allocator, fileSize);
     defer allocator.free(readBuf);
 
-    var lkml = try Lkml.init(allocator, filePath);
+    // const lkml = try Lkml.init(allocator, filePath);
     var parser = try Parser.init(allocator);
     var chars = std.mem.window(u8, readBuf, 1, 1);
 
     while (chars.next()) |char| {
         try parser.parse(char[0]);
     }
+    try parser.finish();
 
-    const parsed = parser.output;
+    const parsed: []u8 = parser.output;
     var key: []const u8 = &[_]u8{};
     var val: []const u8 = &[_]u8{};
-    var view: View = undefined;
-    // var func: fn([]const u8) void = undefined;
-
-    
-    var keyValueEndSplit = std.mem.splitSequence(u8, parsed, "<keyvalue-end>");
-    while (keyValueEndSplit.next()) |keyValueEndToken| {
-        var keyValueStartSplit = std.mem.splitSequence(u8, keyValueEndToken, "<keyvalue-start>");
-        while (keyValueStartSplit.next()) |token| {
-            
-            if (key.len == 0) {
-                key = trim([]const u8, token);
-                continue;
-            } else {
-                val = trim([]const u8, token);
-            }
-            if (key.len > 0 and val.len > 0) {
-                print("key:{s}|val:{s}/////\n\n", .{key, val});
-                if (equalStrings(key, "include:")) {
-                    try lkml.addInclude(val);
-                }
-                if (equalStrings(key, "view:")) {
-                    var viewNameSplit = std.mem.splitSequence(u8, val, "<nonquoted-end>");
-                    while (viewNameSplit.next()) | viewName| {
-                        view = try View.init(allocator, trim([]const u8,viewName));
-                        break;
-                    }
-                    try lkml.addView(view);
-                }
-                key = &[_]u8{};
-                val = &[_]u8{};
-            }
-        }
-    }
 
     // print("{s}", .{parsed});
+    // print("\n\n", .{});
+    // const keyValues: []KeyValue = undefined;
 
-    // lkml.stringify();
+    _ = try getAllKeyValues(allocator, parsed);
+    // const depth: u8 = 0;
+    // const depthStartKey = try std.fmt.allocPrint(allocator, "<depth-start:{any}>", .{depth});
+    // const depthStopKey = try std.fmt.allocPrint(allocator, "<depth-end:{any}>", .{depth});
+    // var depthStartIndexOptional = std.mem.indexOfPos(u8, parsed, 0, depthStartKey);
+    // var depthStopIndexOptional = std.mem.indexOfPos(u8, parsed, 0, depthStopKey);
+    // var subArray = parsed;
+
+    // while (depthStartIndexOptional) |depthStartIndex| {
+    //     if (depthStopIndexOptional) |depthStopIndex| {
+    //         _ = try getKeyValues(allocator, depth, subArray[depthStartIndex + depthStartKey.len..depthStopIndex]);
+    //         subArray = subArray[depthStopIndex+depthStopKey.len..];
+    //         depthStartIndexOptional = std.mem.indexOfPos(u8, subArray, 0, depthStartKey);
+    //         depthStopIndexOptional = std.mem.indexOfPos(u8, subArray, 0, depthStopKey);
+    //     }
+    // }
+    // return keyValues;
+    
+    key = &[_]u8{};
+    val = &[_]u8{};
+
+    // currentObject.lkml.stringify();
 
 }
