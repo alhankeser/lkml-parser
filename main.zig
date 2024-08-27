@@ -488,7 +488,7 @@ pub const Parser = struct {
                     try self.addOutput(printBuff, 1);
                     self.lastKey = key;
                 }
-                if (self.depth == 2 and isValidKey(key, &paramNames)) {
+                if (self.depth >= 2 and isValidKey(key, &paramNames)) {
                     printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start:{any}>", .{self.depth});
                     try self.addOutput(printBuff[0..], key.len);
                     printBuff = try std.fmt.allocPrint(self.allocator, keyValueDelimiter, .{});
@@ -548,15 +548,15 @@ pub const Parser = struct {
             if (char == 125) {
                 self.removeOutputLastChars(1);
                 if (!self.isVariable) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<depth-end:{any}>", .{self.depth});
-                    try self.addOutput(printBuff[0..], 0);
                     if (self.isValue) {
                         printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-end:{any}>", .{self.depth});
                         try self.addOutput(printBuff[0..], 0);
                     }
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<depth-end:{any}>", .{self.depth});
+                    try self.addOutput(printBuff[0..], 0);
                 }
                 self.depth -= 1;
-                if (!self.isVariable and self.depth == 0) {
+                if (!self.isVariable) {
                     printBuff = try std.fmt.allocPrint(self.allocator, "<depth-start:{any}>", .{self.depth});
                     try self.addOutput(printBuff[0..], 0);
                 }
@@ -599,8 +599,17 @@ pub fn equalStrings(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
 }
 
-pub fn cleanVal(parsedVal: []const u8) []const u8 {
-    return parsedVal;
+pub fn cleanVal(text: []const u8) []const u8 {
+    return text;
+}
+
+pub fn getDepth(text: []const u8) !u32 {
+    _ = text;
+    return 1;
+}
+
+pub fn getDepthKey(allocator: Allocator, depth: u32) ![]const u8 {
+    return try std.fmt.allocPrint(allocator, "<depth-start:{any}>", .{depth});
 }
 
 pub const KeyValue = struct{
@@ -613,6 +622,7 @@ pub fn getKeyValue(allocator: Allocator, depth: u8, text: []const u8) !KeyValue 
     var keyValue: KeyValue = undefined;
     const keyvalSplitIndexOptional = std.mem.indexOfPos(u8, text, 0, keyValueDelimiter);
     const keyvalEndDelimiter = try std.fmt.allocPrint(allocator, "<keyvalue-end:{any}>", .{depth});
+    // print("{s}\n\n", .{text});
     if (keyvalSplitIndexOptional) |keyvalSplitIndex| {
         const key = trim([]const u8, text[0..keyvalSplitIndex]);
         const keyvalEndIndexOptional = std.mem.indexOfPos(u8, text, 0, keyvalEndDelimiter);
@@ -625,41 +635,32 @@ pub fn getKeyValue(allocator: Allocator, depth: u8, text: []const u8) !KeyValue 
     return keyValue;
 }
 
-pub fn getKeyValues(allocator: Allocator, text: []u8, depth: u8) ![]KeyValue {
+pub fn getKeyValues(allocator: Allocator, text: []const u8, depth: u8,) ![]KeyValue {
     const depthStartKey = try std.fmt.allocPrint(allocator, "<depth-start:{any}>", .{depth});
     const depthStopKey = try std.fmt.allocPrint(allocator, "<depth-end:{any}>", .{depth});
-    const depthStartIndexOptional = std.mem.indexOfPos(u8, text, 0, depthStartKey);
-    const depthStopIndexOptional = std.mem.indexOfPos(u8, text, 0, depthStopKey);
+    var depthStartSplit = std.mem.splitSequence(u8, text, depthStartKey);
     var keyValuesList = std.ArrayList(KeyValue).init(allocator);
     defer keyValuesList.deinit();
-    if (depthStartIndexOptional) |depthStartIndex| {
+    while (depthStartSplit.next()) |depthChunk| {
+        const depthStopIndexOptional = std.mem.indexOfPos(u8, depthChunk, 0, depthStopKey);
         if (depthStopIndexOptional) |depthStopIndex| {
             const keyValueStartDelimiter = try std.fmt.allocPrint(allocator, "<keyvalue-start:{any}>", .{depth});
-            var keyValueTextSplit = std.mem.splitSequence(u8, text[depthStartIndex + depthStartKey.len..depthStopIndex], keyValueStartDelimiter);
+            var keyValueTextSplit = std.mem.splitSequence(u8, depthChunk[0..depthStopIndex], keyValueStartDelimiter);
             while (keyValueTextSplit.next()) |keyValueText| {
                 const keyval = try getKeyValue(allocator, depth, keyValueText);
                 try keyValuesList.append(keyval);
             }
-            // subArray = subArray[depthStopIndex+depthStopKey.len..];
-            // depthStartIndexOptional = std.mem.indexOfPos(u8, subArray, 0, depthStartKey);
-            // depthStopIndexOptional = std.mem.indexOfPos(u8, subArray, 0, depthStopKey);
+            const nextDepth = depth + 1;
+            const nextDepthKey = try getDepthKey(allocator, nextDepth);
+            if (depthChunk.len > (depthStopIndex + depthStopKey.len + nextDepthKey.len)){
+                const nextDepthKeyString = depthChunk[depthStopIndex + depthStopKey.len..depthStopIndex + depthStopKey.len + nextDepthKey.len];
+                if (equalStrings(nextDepthKey, nextDepthKeyString)) {
+                    _ = try getKeyValues(allocator, depthChunk[depthStopIndex + depthStopKey.len..], nextDepth);
+                }
+            }
         }
     }
-    // depthStartIndexOptional = std.mem.indexOfPos(u8, subArray, 0, depthStartKey);
     return keyValuesList.items;
-}
-
-pub fn getAllKeyValues(allocator: Allocator, text: []u8) !void {
-    var depth: u8 = 0;
-    const subArray = text[0..];
-    // var depthStartKey = try std.fmt.allocPrint(allocator, "<depth-start:{any}>", .{depth});
-    // var depthStopKey = try std.fmt.allocPrint(allocator, "<depth-end:{any}>", .{depth});
-    // var depthStartIndexOptional = std.mem.indexOfPos(u8, text, 0, depthStartKey);
-    // var depthStopIndexOptional = std.mem.indexOfPos(u8, text, 0, depthStopKey);
-    while (depth < 3) {
-        _ = try getKeyValuesByDepth(allocator, subArray, depth);
-        depth += 1;
-    }
 }
 
 pub fn main() !void {
@@ -690,10 +691,10 @@ pub fn main() !void {
     var val: []const u8 = &[_]u8{};
 
     // print("{s}", .{parsed});
-    // print("\n\n", .{});
+    print("\n\n", .{});
     // const keyValues: []KeyValue = undefined;
 
-    _ = try getAllKeyValues(allocator, parsed);
+    _ = try getKeyValues(allocator, parsed, 0);
     // const depth: u8 = 0;
     // const depthStartKey = try std.fmt.allocPrint(allocator, "<depth-start:{any}>", .{depth});
     // const depthStopKey = try std.fmt.allocPrint(allocator, "<depth-end:{any}>", .{depth});
