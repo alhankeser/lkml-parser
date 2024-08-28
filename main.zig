@@ -5,22 +5,22 @@ const print = std.debug.print;
 
 const keyValueDelimiter = "|||";
 
-const LkmlObject = union(enum) {
-    lkml: Lkml,
-    view: View,
-    explore: Explore,
-};
+// const LkmlObject = union(enum) {
+//     lkml: Lkml,
+//     view: View,
+//     explore: Explore,
+// };
 
-pub const AddItemReturnType = struct{
-    name: []const u8,
-    object: LkmlObject
-};
+// pub const AddItemReturnType = struct{
+//     name: []const u8,
+//     object: LkmlObject
+// };
 
-pub const DepthLookup = enum(u2) {
-    Zero = 0,
-    One = 1,
-    Two = 2,
-};
+// pub const DepthLookup = enum(u2) {
+//     Zero = 0,
+//     One = 1,
+//     Two = 2,
+// };
 
 var lkmlParams = [_][]const u8{ "view:", "explore:", "include:", "extends:" };
 var viewParams = [_][]const u8{ "label:", "extension:", "sql_table_name:", "drill_fields:", "suggestions:", "fields_hidden_by_default:", "extends:", "required_access_grants:", "derived_table:", "filter:", "parameter:", "dimension:", "dimension_group:", "measure:", "set:" };
@@ -99,21 +99,12 @@ pub fn keyContainsSql(key: []u8) bool {
 }
 
 pub const Lkml = struct {
-    pub const Depth = enum { Zero, One, Two };
     allocator: Allocator,
     filePath: []const u8,
     includes: [][]const u8,
     views: []View,
     explores: []Explore,
-    depth: Depth,
-    currentObject: union(Depth) {
-        Zero: Lkml,
-        One: union {
-            View: View,
-            Explore: Explore,
-        },
-        Two: Field,
-    },
+    latestType: []const u8,
 
     pub fn init(allocator: Allocator, filePath: []const u8) !Lkml {
         return .{
@@ -122,6 +113,7 @@ pub const Lkml = struct {
             .includes = try allocator.alloc([]const u8, 0),
             .views = try allocator.alloc(View, 0),
             .explores = try allocator.alloc(Explore, 0),
+            .latestType = undefined,
         };
     }
 
@@ -150,26 +142,29 @@ pub const Lkml = struct {
         self.explores = try self.add([]T, T, self.explores, explore);
     }
 
-    pub fn addItem(self: *Lkml, currentObjectType: []const u8, currentObject: LkmlObject, key: []const u8, val: []const u8) !AddItemReturnType {
-        var objectType = currentObjectType;
-        var object = currentObject;
-        if (equalStrings(key, "include:")) {
-            try self.addInclude(val);
+    pub fn addItem(self: *Lkml, keyValue: KeyValue) !void {
+        if (keyValue.depth == 0) {
+            if (equalStrings(keyValue.key, "include")) {
+                try self.addInclude(keyValue.val);
+            }
+            if (equalStrings(keyValue.key, "view")) {
+                const view = try View.init(self.allocator, keyValue.val);
+                try self.addView(view);
+            }
+            if (equalStrings(keyValue.key, "explore")) {
+                const explore = try Explore.init(self.allocator, keyValue.val);
+                try self.addExplore(explore);
+            }
+            self.latestType = keyValue.key;
+            return;
         }
-        if (equalStrings(key, "view:")) {
-            const view = try View.init(self.allocator, val);
-            try self.addView(view);
-            objectType = "view";
-            object = LkmlObject{.view = view};
+        if (keyValue.depth == 1) {
+            if (equalStrings(self.latestType, "view")) {
+                if (equalStrings(keyValue.key, "label")) {
+                    self.views[self.views.len - 1].label = keyValue.val;
+                }
+            }
         }
-        if (equalStrings(key, "explore:")) {
-            const explore = try Explore.init(self.allocator, val);
-            try self.addExplore(explore);
-            objectType = "explore";
-            object = LkmlObject{.explore = explore};
-        }
-        const result = AddItemReturnType{.name = objectType, .object = object};
-        return result;
     }
 
     fn add(self: *Lkml, srcType: type, itemType: type, src: srcType, item: itemType) !srcType {
@@ -198,7 +193,7 @@ pub const View = struct {
     pub const StringAttribute = enum {
         Name,
         Label,
-        Description,
+        // Description,
         Extension,
         SqlTableName,
         DrillFields,
@@ -249,14 +244,18 @@ pub const View = struct {
         switch (attribute) {
             .Name => self.name = val,
             .Label => self.label = val,
-            .Description => self.description = val,
-            .Extension => self.Extension = val,
-            .SqlTableName => self.SqlTableName = val,
-            .DrillFields => self.DrillFields = val,
+            // .Description => self.description = val,
+            .Extension => self.extension = val,
+            .SqlTableName => self.sqlTableName = val,
+            .DrillFields => self.drillFields = val,
         }
     }
 
-    fn add(self: *Lkml, srcType: type, itemType: type, src: srcType, item: itemType) !srcType {
+    pub fn addLabel(self: *View, val: []const u8) !void {
+        self.label = val;
+    }
+
+    fn add(self: *View, srcType: type, itemType: type, src: srcType, item: itemType) !srcType {
         const count = src.len + 1;
         var more = try self.allocator.alloc(itemType, count);
         std.mem.copyForwards(itemType, more[0..count], src);
@@ -603,13 +602,11 @@ pub fn cleanVal(text: []const u8) []const u8 {
     return text;
 }
 
-pub fn getDepth(text: []const u8) !u32 {
-    _ = text;
-    return 1;
-}
-
-pub fn getDepthKey(allocator: Allocator, depth: u32) ![]const u8 {
-    return try std.fmt.allocPrint(allocator, "<depth-start:{any}>", .{depth});
+pub fn getDepthKey(allocator: Allocator, depth: u32, isStart: bool) ![]const u8 {
+    if (isStart) {
+        return try std.fmt.allocPrint(allocator, "<depth-start:{any}>", .{depth});
+    }
+    return try std.fmt.allocPrint(allocator, "<depth-end:{any}>", .{depth});
 }
 
 pub const KeyValue = struct{
@@ -618,49 +615,49 @@ pub const KeyValue = struct{
     val: []const u8,
 };
 
-pub fn getKeyValue(allocator: Allocator, depth: u8, text: []const u8) !KeyValue {
+pub fn getKeyValue(allocator: Allocator, depth: u8, text: []const u8, lkml: *Lkml) !void {
     var keyValue: KeyValue = undefined;
     const keyvalSplitIndexOptional = std.mem.indexOfPos(u8, text, 0, keyValueDelimiter);
     const keyvalEndDelimiter = try std.fmt.allocPrint(allocator, "<keyvalue-end:{any}>", .{depth});
-    // print("{s}\n\n", .{text});
     if (keyvalSplitIndexOptional) |keyvalSplitIndex| {
         const key = trim([]const u8, text[0..keyvalSplitIndex]);
         const keyvalEndIndexOptional = std.mem.indexOfPos(u8, text, 0, keyvalEndDelimiter);
         if (keyvalEndIndexOptional) |keyvalEndIndex| {
             const val = trim([]const u8, text[keyvalSplitIndex + keyValueDelimiter.len..keyvalEndIndex]);
             keyValue = KeyValue{.depth = depth, .key = key, .val = val};
+            try lkml.addItem(keyValue);
         }
-        print("depth:{any}\nkey:{s}\nval:{s}\n\n", .{keyValue.depth, keyValue.key, keyValue.val});
+        // print("depth:{any}\nkey:{s}\nval:{s}\n\n", .{keyValue.depth, keyValue.key, keyValue.val});
     }
-    return keyValue;
+    // return keyValue;
 }
 
-pub fn getKeyValues(allocator: Allocator, text: []const u8, depth: u8,) ![]KeyValue {
-    const depthStartKey = try std.fmt.allocPrint(allocator, "<depth-start:{any}>", .{depth});
-    const depthStopKey = try std.fmt.allocPrint(allocator, "<depth-end:{any}>", .{depth});
+pub fn getKeyValues(allocator: Allocator, text: []const u8, depth: u8, lkml: *Lkml) !void {
+    const depthStartKey = try getDepthKey(allocator, depth, true);
+    const depthStopKey = try getDepthKey(allocator, depth, false);
     var depthStartSplit = std.mem.splitSequence(u8, text, depthStartKey);
-    var keyValuesList = std.ArrayList(KeyValue).init(allocator);
-    defer keyValuesList.deinit();
+    // var keyValuesList = std.ArrayList(KeyValue).init(allocator);
+    // defer keyValuesList.deinit();
     while (depthStartSplit.next()) |depthChunk| {
         const depthStopIndexOptional = std.mem.indexOfPos(u8, depthChunk, 0, depthStopKey);
         if (depthStopIndexOptional) |depthStopIndex| {
             const keyValueStartDelimiter = try std.fmt.allocPrint(allocator, "<keyvalue-start:{any}>", .{depth});
             var keyValueTextSplit = std.mem.splitSequence(u8, depthChunk[0..depthStopIndex], keyValueStartDelimiter);
             while (keyValueTextSplit.next()) |keyValueText| {
-                const keyval = try getKeyValue(allocator, depth, keyValueText);
-                try keyValuesList.append(keyval);
+                try getKeyValue(allocator, depth, keyValueText, lkml);
+                // try keyValuesList.append(keyval);
             }
             const nextDepth = depth + 1;
-            const nextDepthKey = try getDepthKey(allocator, nextDepth);
+            const nextDepthKey = try getDepthKey(allocator, nextDepth, true);
             if (depthChunk.len > (depthStopIndex + depthStopKey.len + nextDepthKey.len)){
                 const nextDepthKeyString = depthChunk[depthStopIndex + depthStopKey.len..depthStopIndex + depthStopKey.len + nextDepthKey.len];
                 if (equalStrings(nextDepthKey, nextDepthKeyString)) {
-                    _ = try getKeyValues(allocator, depthChunk[depthStopIndex + depthStopKey.len..], nextDepth);
+                    try getKeyValues(allocator, depthChunk[depthStopIndex + depthStopKey.len..], nextDepth, lkml);
                 }
             }
         }
     }
-    return keyValuesList.items;
+    // return keyValuesList.items;
 }
 
 pub fn main() !void {
@@ -677,44 +674,16 @@ pub fn main() !void {
     const readBuf = try file.readToEndAlloc(allocator, fileSize);
     defer allocator.free(readBuf);
 
-    // const lkml = try Lkml.init(allocator, filePath);
+    var lkml = try Lkml.init(allocator, filePath);
     var parser = try Parser.init(allocator);
     var chars = std.mem.window(u8, readBuf, 1, 1);
-
     while (chars.next()) |char| {
         try parser.parse(char[0]);
     }
     try parser.finish();
-
     const parsed: []u8 = parser.output;
-    var key: []const u8 = &[_]u8{};
-    var val: []const u8 = &[_]u8{};
-
-    // print("{s}", .{parsed});
-    print("\n\n", .{});
-    // const keyValues: []KeyValue = undefined;
-
-    _ = try getKeyValues(allocator, parsed, 0);
-    // const depth: u8 = 0;
-    // const depthStartKey = try std.fmt.allocPrint(allocator, "<depth-start:{any}>", .{depth});
-    // const depthStopKey = try std.fmt.allocPrint(allocator, "<depth-end:{any}>", .{depth});
-    // var depthStartIndexOptional = std.mem.indexOfPos(u8, parsed, 0, depthStartKey);
-    // var depthStopIndexOptional = std.mem.indexOfPos(u8, parsed, 0, depthStopKey);
-    // var subArray = parsed;
-
-    // while (depthStartIndexOptional) |depthStartIndex| {
-    //     if (depthStopIndexOptional) |depthStopIndex| {
-    //         _ = try getKeyValues(allocator, depth, subArray[depthStartIndex + depthStartKey.len..depthStopIndex]);
-    //         subArray = subArray[depthStopIndex+depthStopKey.len..];
-    //         depthStartIndexOptional = std.mem.indexOfPos(u8, subArray, 0, depthStartKey);
-    //         depthStopIndexOptional = std.mem.indexOfPos(u8, subArray, 0, depthStopKey);
-    //     }
-    // }
-    // return keyValues;
+    _ = try getKeyValues(allocator, parsed, 0, &lkml);
     
-    key = &[_]u8{};
-    val = &[_]u8{};
-
-    // currentObject.lkml.stringify();
+    lkml.stringify();
 
 }
