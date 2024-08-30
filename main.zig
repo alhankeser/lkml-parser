@@ -100,16 +100,16 @@ pub fn keyContainsSql(key: []u8) bool {
 
 pub const Lkml = struct {
     allocator: Allocator,
-    filePath: []const u8,
+    filename: []const u8,
     includes: [][]const u8,
     views: []View,
     explores: []Explore,
     latestType: []const u8,
 
-    pub fn init(allocator: Allocator, filePath: []const u8) !Lkml {
+    pub fn init(allocator: Allocator, filename: []const u8) !Lkml {
         return .{
             .allocator = allocator,
-            .filePath = filePath,
+            .filename = filename,
             .includes = try allocator.alloc([]const u8, 0),
             .views = try allocator.alloc(View, 0),
             .explores = try allocator.alloc(Explore, 0),
@@ -119,7 +119,7 @@ pub const Lkml = struct {
 
     pub fn stringify(self: Lkml) void {
         try printComma();
-        print("\"filepath\": \"{s}\", ", .{self.filePath});
+        print("\"filename\": \"{s}\", ", .{self.filename});
         print("\"includes\": ", .{});
         try printStrings(self.includes);
         try printComma();
