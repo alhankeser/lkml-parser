@@ -74,22 +74,11 @@ pub fn getYesNo(boolean: bool) ![]const u8 {
     };
 }
 
-pub fn trim(T: type, chars: T) T {
-    if (chars.len == 0) {
-        return chars;
-    }
-    var start: u16 = 0;
-    var end = chars.len - 1;
-    while (start < chars.len and (chars[start] == 32 or chars[start] == 10)) {
-        start += 1;
-    }
-    while (end > 0 and end > start and (chars[end] == 32 or chars[end] == 10)) {
-        end -= 1;
-    }
-    return chars[start .. end + 1];
+pub fn trimString(chars: []u8) []const u8 {
+    return std.mem.trim(u8, chars, "\n ");
 }
 
-pub fn keyContainsSql(key: []u8) bool {
+pub fn keyContainsSql(key: []const u8) bool {
     const index = std.mem.indexOf(u8, key, "sql");
     if (index) |idx| {
         _ = idx;
@@ -343,6 +332,10 @@ pub const Explore = struct {
     }
 };
 
+pub fn isEven(n: u32) bool {
+    return n & 1 == 0;
+}
+
 pub const Parser = struct {
     allocator: Allocator,
     chars: []u8,
@@ -354,9 +347,10 @@ pub const Parser = struct {
     isVariable: bool,
     isValue: bool,
     isSql: bool,
-    lastKey: []u8,
+    lastKey: []const u8,
     valueTerminatorChar: u8,
     output: []u8,
+    key: []u8,
 
     pub fn init(allocator: Allocator) !Parser {
         return .{
@@ -372,7 +366,8 @@ pub const Parser = struct {
             .isSql = false,
             .lastKey = &[_]u8{},
             .valueTerminatorChar = 0,
-            .output = &[_]u8{}
+            .output = &[_]u8{},
+            .key = &[_]u8{},
         };
     }
 
@@ -411,20 +406,32 @@ pub const Parser = struct {
         }
     }
 
-    pub fn parse(self: *Parser, char: u8) !void {
-        if (self.output.len == 0) {
-            var printBuff = try std.fmt.allocPrint(self.allocator, "<depth-start:{any}>", .{self.depth});
-            try self.addOutput(printBuff[0..], 0);
+    pub fn updateKey(self: *Parser, itemKey: []const u8) !void {
+        var newKey: []u8 = &[_]u8{};
+        var depthCounter: u32 = 0;
+        var keySplit = std.mem.splitAny(u8, self.key, ".");
+        _ = keySplit.next();
+        while (depthCounter < self.depth) {
+            if (keySplit.next()) |keyPart| {
+                newKey = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{newKey, keyPart});
+            }
+            depthCounter += 1;
         }
+        newKey = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{newKey, itemKey});
+        self.allocator.free(self.key);
+        self.key = newKey[0..];
+    }
+
+    pub fn parse(self: *Parser, char: u8) !void {
         try self.addChar(char);
         const charString: [1]u8 = [1]u8{char};
         var printBuff = try std.fmt.allocPrint(self.allocator, "{s}", .{charString});
         try self.addOutput(printBuff[0..], 0);
         // list item
-        if (self.isBrackets and char == 44) {
-            printBuff = try std.fmt.allocPrint(self.allocator, "<list-item-end>", .{});
-            try self.addOutput(printBuff[0..], 0);
-        }
+        // if (self.isBrackets and char == 44) {
+        //     printBuff = try std.fmt.allocPrint(self.allocator, "<list-item-end>", .{});
+        //     try self.addOutput(printBuff[0..], 0);
+        // }
         // value close
         if (self.isValue and (
             (!self.isSql and self.valueTerminatorChar == char)
@@ -435,66 +442,86 @@ pub const Parser = struct {
             or (self.chars.len > 1
                 and self.isNonQuoted
                 and (self.valueTerminatorChar == char or char == 10)))) {
-
+            
+            if (char == 32 or char == 10) {
+                self.removeOutputLastChars(1);
+            }
             // brackets close
             if (self.isBrackets) {
                 self.isBrackets = false;
-                printBuff = try std.fmt.allocPrint(self.allocator, "<list-end>", .{});
+                printBuff = try std.fmt.allocPrint(self.allocator, "#!list", .{});
                 try self.addOutput(printBuff[0..], 0);
             }
             // sql close
             if (self.isSql) {
                 self.isSql = false;
-                // printBuff = try std.fmt.allocPrint(self.allocator, "<sql-end>", .{});
-                // try self.addOutput(printBuff[0..], 0);
+                printBuff = try std.fmt.allocPrint(self.allocator, "#!sql", .{});
+                try self.addOutput(printBuff[0..], 0);
             }
             // quotes close
             if (self.isQuoted) {
                 self.isQuoted = false;
-                // printBuff = try std.fmt.allocPrint(self.allocator, "<quotes-end>", .{});
-                // try self.addOutput(printBuff[0..], 0);
+                printBuff = try std.fmt.allocPrint(self.allocator, "#!quotes", .{});
+                try self.addOutput(printBuff[0..], 0);
             }
             // non quoted close
             if (self.isNonQuoted) {
                 self.isNonQuoted = false;
-                // printBuff = try std.fmt.allocPrint(self.allocator, "<nonquoted-end>", .{});
-                // try self.addOutput(printBuff[0..], 0);
+                printBuff = try std.fmt.allocPrint(self.allocator, "#!nonquoted", .{});
+                try self.addOutput(printBuff[0..], 0);
             }
+            
             // reset the rest
             self.lastKey = &[_]u8{};
             self.isValue = false;
             self.valueTerminatorChar = 0;
             self.chars = &[_]u8{};
-            printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-end:{any}>", .{self.depth});
+            printBuff = try std.fmt.allocPrint(self.allocator, "</{s}>", .{self.key});
             try self.addOutput(printBuff[0..], 0);
             return;
         }
         if (!self.isQuoted and !self.isBrackets and !self.isNonQuoted and !self.isSql) {
+            // curly braces open
+            if (char == 123) {
+                self.removeOutputLastChars(1);
+                if (self.isValue) {
+                    self.isValue = false;
+                    printBuff = try std.fmt.allocPrint(self.allocator, "<nested-value>", .{});
+                    try self.addOutput(printBuff[0..], 0);
+                }
+                self.depth += 1;
+                if (self.chars.len > 1 and self.chars[self.chars.len - 2] == 36) {
+                    self.isVariable = true;
+                }
+                self.chars = &[_]u8{};
+                return;
+            }
+
+            // curly braces close
+            if (char == 125) {
+                self.removeOutputLastChars(1);
+                self.depth -= 1;
+                if (self.isVariable) {
+                    self.isVariable = false;
+                }
+                self.chars = &[_]u8{};
+                return;
+            }
+
             // key
             if (!self.isValue and char == 58 and (self.chars[0] == 32 or self.chars[0] == 10 or self.chars.len == self.totalChars)) {
-                const key = trim([]u8, self.chars[0..]);
-                if (self.depth == 0 and isValidKey(key, &lkmlParams)) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start:{any}>", .{self.depth});
-                    try self.addOutput(printBuff[0..], key.len);
-                    printBuff = try std.fmt.allocPrint(self.allocator, keyValueDelimiter, .{});
-                    try self.addOutput(printBuff, 1);
-                    self.lastKey = key;
-                }
-                if (self.depth == 1 and isValidKey(key, &viewParams)) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start:{any}>", .{self.depth});
-                    try self.addOutput(printBuff[0..], key.len);
-                    printBuff = try std.fmt.allocPrint(self.allocator, keyValueDelimiter, .{});
-                    try self.addOutput(printBuff, 1);
-                    self.lastKey = key;
-                }
-                if (self.depth >= 2 and isValidKey(key, &paramNames)) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-start:{any}>", .{self.depth});
-                    try self.addOutput(printBuff[0..], key.len);
-                    printBuff = try std.fmt.allocPrint(self.allocator, keyValueDelimiter, .{});
-                    try self.addOutput(printBuff, 1);
-                    self.lastKey = key;
-                }
-                self.removeOutputLastChars(1);
+                var key = trimString(self.chars[0..]);
+                key = key[0..key.len-1];
+                try self.updateKey(key);
+                // self.key = try std.fmt.allocPrint(self.allocator, "{any}.{s}", .{self.depth,key});
+                
+                printBuff = try std.fmt.allocPrint(self.allocator, "\n<{s}>", .{self.key});
+                try self.addOutput(printBuff[0..], key.len+1);
+                // printBuff = try std.fmt.allocPrint(self.allocator, keyValueDelimiter, .{});
+                // try self.addOutput(printBuff, 1);
+                self.lastKey = key;
+                const keyLen: u16 = @intCast(key.len);
+                self.removeOutputLastChars(keyLen + 1);
                 self.isValue = true;
                 self.chars = &[_]u8{};
                 return;
@@ -519,53 +546,6 @@ pub const Parser = struct {
                 return;
             }
 
-            // curly braces open
-            if (char == 123) {
-                self.removeOutputLastChars(1);
-                if (self.isValue) {
-                    self.isValue = false;
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<nested-value><keyvalue-end:{any}>", .{self.depth});
-                    try self.addOutput(printBuff[0..], 0);
-                }
-                // if (!self.isVariable and self.depth == 0) {
-                //     printBuff = try std.fmt.allocPrint(self.allocator, "<depth-end:{any}>", .{self.depth});
-                //     try self.addOutput(printBuff[0..], 0);
-                // }
-                self.depth += 1;
-                if (!self.isVariable) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<depth-end:{any}><depth-start:{any}>", .{self.depth-1, self.depth});
-                    try self.addOutput(printBuff[0..], 0);
-                }
-                if (self.chars.len > 1 and self.chars[self.chars.len - 2] == 36) {
-                    self.isVariable = true;
-                }
-                self.chars = &[_]u8{};
-                return;
-            }
-
-            // curly braces close
-            if (char == 125) {
-                self.removeOutputLastChars(1);
-                if (!self.isVariable) {
-                    if (self.isValue) {
-                        printBuff = try std.fmt.allocPrint(self.allocator, "<keyvalue-end:{any}>", .{self.depth});
-                        try self.addOutput(printBuff[0..], 0);
-                    }
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<depth-end:{any}>", .{self.depth});
-                    try self.addOutput(printBuff[0..], 0);
-                }
-                self.depth -= 1;
-                if (!self.isVariable) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<depth-start:{any}>", .{self.depth});
-                    try self.addOutput(printBuff[0..], 0);
-                }
-                if (self.isVariable) {
-                    self.isVariable = false;
-                }
-                self.chars = &[_]u8{};
-                return;
-            }
-
             // first char of value is not quote or bracket
             if (self.isValue and char != 32) {
                 self.isSql = keyContainsSql(self.lastKey);
@@ -581,16 +561,12 @@ pub const Parser = struct {
                 }
                 return;
             }
+
+            // unnecessary space or newline
+            if (char == 32 or char == 10) {
+                self.removeOutputLastChars(1);
+            }
         }
-    }
-
-    pub fn finish(self: *Parser) !void {
-        var printBuff = try std.fmt.allocPrint(self.allocator, "<depth-end:{any}>", .{self.depth});
-        try self.addOutput(printBuff[0..], 0);
-    }
-
-    pub fn stringify(self: *Parser) !void {
-        print("{s}", .{self.output});
     }
 };
 
@@ -598,67 +574,11 @@ pub fn equalStrings(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
 }
 
-pub fn cleanVal(text: []const u8) []const u8 {
-    return text;
-}
-
-pub fn getDepthKey(allocator: Allocator, depth: u32, isStart: bool) ![]const u8 {
-    if (isStart) {
-        return try std.fmt.allocPrint(allocator, "<depth-start:{any}>", .{depth});
-    }
-    return try std.fmt.allocPrint(allocator, "<depth-end:{any}>", .{depth});
-}
-
 pub const KeyValue = struct{
     depth: u8,
     key: []const u8,
     val: []const u8,
 };
-
-pub fn getKeyValue(allocator: Allocator, depth: u8, text: []const u8, lkml: *Lkml) !void {
-    var keyValue: KeyValue = undefined;
-    const keyvalSplitIndexOptional = std.mem.indexOfPos(u8, text, 0, keyValueDelimiter);
-    const keyvalEndDelimiter = try std.fmt.allocPrint(allocator, "<keyvalue-end:{any}>", .{depth});
-    if (keyvalSplitIndexOptional) |keyvalSplitIndex| {
-        const key = trim([]const u8, text[0..keyvalSplitIndex]);
-        const keyvalEndIndexOptional = std.mem.indexOfPos(u8, text, 0, keyvalEndDelimiter);
-        if (keyvalEndIndexOptional) |keyvalEndIndex| {
-            const val = trim([]const u8, text[keyvalSplitIndex + keyValueDelimiter.len..keyvalEndIndex]);
-            keyValue = KeyValue{.depth = depth, .key = key, .val = val};
-            try lkml.addItem(keyValue);
-        }
-        // print("depth:{any}\nkey:{s}\nval:{s}\n\n", .{keyValue.depth, keyValue.key, keyValue.val});
-    }
-    // return keyValue;
-}
-
-pub fn getKeyValues(allocator: Allocator, text: []const u8, depth: u8, lkml: *Lkml) !void {
-    const depthStartKey = try getDepthKey(allocator, depth, true);
-    const depthStopKey = try getDepthKey(allocator, depth, false);
-    var depthStartSplit = std.mem.splitSequence(u8, text, depthStartKey);
-    // var keyValuesList = std.ArrayList(KeyValue).init(allocator);
-    // defer keyValuesList.deinit();
-    while (depthStartSplit.next()) |depthChunk| {
-        const depthStopIndexOptional = std.mem.indexOfPos(u8, depthChunk, 0, depthStopKey);
-        if (depthStopIndexOptional) |depthStopIndex| {
-            const keyValueStartDelimiter = try std.fmt.allocPrint(allocator, "<keyvalue-start:{any}>", .{depth});
-            var keyValueTextSplit = std.mem.splitSequence(u8, depthChunk[0..depthStopIndex], keyValueStartDelimiter);
-            while (keyValueTextSplit.next()) |keyValueText| {
-                try getKeyValue(allocator, depth, keyValueText, lkml);
-                // try keyValuesList.append(keyval);
-            }
-            const nextDepth = depth + 1;
-            const nextDepthKey = try getDepthKey(allocator, nextDepth, true);
-            if (depthChunk.len > (depthStopIndex + depthStopKey.len + nextDepthKey.len)){
-                const nextDepthKeyString = depthChunk[depthStopIndex + depthStopKey.len..depthStopIndex + depthStopKey.len + nextDepthKey.len];
-                if (equalStrings(nextDepthKey, nextDepthKeyString)) {
-                    try getKeyValues(allocator, depthChunk[depthStopIndex + depthStopKey.len..], nextDepth, lkml);
-                }
-            }
-        }
-    }
-    // return keyValuesList.items;
-}
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -674,16 +594,18 @@ pub fn main() !void {
     const readBuf = try file.readToEndAlloc(allocator, fileSize);
     defer allocator.free(readBuf);
 
-    var lkml = try Lkml.init(allocator, filePath);
+    // var lkml = try Lkml.init(allocator, filePath);
     var parser = try Parser.init(allocator);
     var chars = std.mem.window(u8, readBuf, 1, 1);
     while (chars.next()) |char| {
         try parser.parse(char[0]);
     }
-    try parser.finish();
     const parsed: []u8 = parser.output;
-    _ = try getKeyValues(allocator, parsed, 0, &lkml);
+
+    print("{s}", .{parsed});
+
+    // _ = try getKeyValues(allocator, parsed, 0, &lkml);
     
-    lkml.stringify();
+    // lkml.stringify();
 
 }
