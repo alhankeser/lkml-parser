@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const stdout = std.io.getStdOut().writer();
-const print = std.debug.print;
+// const print = std.debug.print;
 
 const keyValueDelimiter = "|||";
 
@@ -28,7 +28,7 @@ var paramNames = [_][]const u8{ "action", "alias", "allow_approximate_optimizati
 
 pub fn isValidKey(needle: []const u8, haystack: [][]const u8) bool {
     for (haystack) |thing| {
-        if (equalStrings(needle, thing)) {
+        if (eq(needle, thing)) {
             return true;
         }
     }
@@ -38,33 +38,37 @@ pub fn isValidKey(needle: []const u8, haystack: [][]const u8) bool {
 pub fn printStrings(items: [][]const u8) !void {
     const count = items.len;
     var i: i8 = 1;
-    print("[", .{});
+    std.debug.print("[", .{});
     for (items) |item| {
-        print("\"{s}\"", .{item});
+        std.debug.print("\"{s}\"", .{item});
         if (i < count) {
             try printComma();
         }
         i += 1;
     }
-    print("]", .{});
+    std.debug.print("]", .{});
 }
 
 pub fn printObjects(T: type, items: []T) !void {
-    const count = items.len;
-    var i: i8 = 1;
-    print("[", .{});
+    // _ = items;
+    // const count = items.len;
+    // var i: i8 = 1;
+    std.debug.print("[", .{});
     for (items) |item| {
-        try item.stringify();
-        if (i < count) {
-            try printComma();
-        }
-        i += 1;
+        std.debug.print("###type: {any}", .{@TypeOf(item)});
+        // const dereferenced = item.*;
+        // std.debug.print("##{s}\n", .{dereferenced.label});
+        // try item.stringify();
+        // if (i < count) {
+        //     try printComma();
+        // }
+        // i += 1;
     }
-    print("] ", .{});
+    std.debug.print("] ", .{});
 }
 
 pub fn printComma() !void {
-    print(", ", .{});
+    std.debug.print(", ", .{});
 }
 
 pub fn getYesNo(boolean: bool) ![]const u8 {
@@ -88,34 +92,47 @@ pub fn keyContainsSql(key: []const u8) bool {
 }
 
 pub const Lkml = struct {
+    arena: *std.heap.ArenaAllocator,
     allocator: Allocator,
     filename: []const u8,
     includes: [][]const u8,
     extends: [][]const u8,
-    views: []View,
+    views: []*View,
     explores: []Explore,
     objectIndex: usize,
+    views_as_string: []const u8,
 
-    pub fn init(allocator: Allocator, filename: []const u8) !Lkml {
-        return .{
+    pub fn init(parent_allocator: Allocator, filename: []const u8) !Lkml {
+        var arena = try parent_allocator.create(std.heap.ArenaAllocator);
+        arena.* = std.heap.ArenaAllocator.init(parent_allocator);
+        const allocator = arena.allocator();
+        
+        return Lkml{
+            .arena = arena,
             .allocator = allocator,
             .filename = filename,
             .includes = try allocator.alloc([]const u8, 0),
             .extends = try allocator.alloc([]const u8, 0),
-            .views = try allocator.alloc(View, 0),
+            .views = try allocator.alloc(*View, 0),
             .explores = try allocator.alloc(Explore, 0),
             .objectIndex = 0,
+            .views_as_string = "",
         };
     }
 
-    pub fn stringify(self: Lkml) void {
+    pub fn stringify(self: *Lkml) !void {
         try printComma();
-        print("\"filename\": \"{s}\", ", .{self.filename});
-        print("\"includes\": ", .{});
+        std.debug.print("\"filename\": \"{s}\", ", .{self.filename});
+        std.debug.print("\"includes\": ", .{});
         try printStrings(self.includes);
         try printComma();
-        print("\"views\": ", .{});
-        try printObjects(View, self.views);
+        std.debug.print("\"views\": ", .{});
+        std.debug.print("{s}", .{self.views_as_string});
+        // for (self.views) |view| {
+        //     try view.stringify();
+        //     // std.debug.print("###{s}\n", .{view.label});
+        // }
+        // try printObjects(*View, self.views);
     }
 
     pub fn addInclude(self: *Lkml, include: []const u8) !void {
@@ -128,7 +145,7 @@ pub const Lkml = struct {
         self.extends = try self.add([]T, T, self.extends, extend);
     }
 
-    pub fn addView(self: *Lkml, view: View) !void {
+    pub fn addView(self: *Lkml, view: *View) !void {
         const T = @TypeOf(view);
         self.views = try self.add([]T, T, self.views, view);
     }
@@ -139,60 +156,57 @@ pub const Lkml = struct {
     }
 
     pub fn addItem(self: *Lkml, depth: usize, key: []const u8, val: []const u8, valType: []const u8) !void {
-        print("{any}, {s}, {s}, {s}", .{depth, key, val, valType});
+        // std.debug.print("{any}, {s}, {s}, {s}", .{depth, key, val, valType});
         var objectType: []const u8 = undefined;
-        var field: []const u8 = undefined;
+        var fieldKey: []const u8 = undefined;
         var param: []const u8 = undefined;
         var keySplit = std.mem.splitSequence(u8, key, ".");
         if (depth == 0) {
-            if (equalStrings(key, "include")) {
+            if (eq(key, "include")) {
                 try self.addInclude(val);
             }
-            if (equalStrings(key, "extend")) {
+            if (eq(key, "extend")) {
                 try self.addExtend(val);
             }
-            if (equalStrings(key, "view")) {
-                const view = try View.init(self.allocator, val);
-                try self.addView(view);
+            if (eq(key, "view")) {
+                var view = try View.init(self.allocator, val);
+                try view.initFieldMap();
+                try self.addView(&view);
                 self.objectIndex = self.views.len - 1;
             }
-            if (equalStrings(key, "explore")) {
+            if (eq(key, "explore")) {
                 const explore = try Explore.init(self.allocator, val);
                 try self.addExplore(explore);
                 self.objectIndex = self.explores.len - 1;
             }
             return;
         }
+        // std.debug.print("#$%{s}\n", .{key});
         if (depth == 1) {
             
             if (keySplit.next()) |res| {
                 objectType = res;
             }
             if (keySplit.next()) |res| {
-                field = res;
+                fieldKey = res;
             }
 
-            const isView = equalStrings(objectType, "view");
-            const isExplore = equalStrings(objectType, "explore");
+            const isView = eq(objectType, "view");
+            const isExplore = eq(objectType, "explore");
 
-            if (isView and equalStrings(field, "dimension")) {
-                var dim = try Field.init(self.allocator, val);
-                try self.views[self.objectIndex].addDimension(dim);
-                dim.name = dim.name;
+            if (isView) {
+                const object = self.views[self.objectIndex];
+                const field = try Field.init(self.allocator, val);
+                try object.update(fieldKey, val, valType, field);
+                // end of object
+                if (fieldKey[0] == 48) {
+                    const object_as_string = try object.stringify();
+                    self.views_as_string = try std.fmt.allocPrint(self.allocator, "{s},{s}", .{self.views_as_string, object_as_string});
+                }
                 return;
             }
 
-            if (isView and equalStrings(field, "label")) {
-                self.views[self.objectIndex].label = val;
-                return;
-            }
-
-            if (isView and equalStrings(field, "sql_table_name")) {
-                self.views[self.objectIndex].sqlTableName = val;
-                return;
-            }
-
-            if (isExplore and equalStrings(field, "name")) {
+            if (isExplore and eq(fieldKey, "name")) {
                 self.explores[self.objectIndex].name = val;
                 return;
             }
@@ -213,91 +227,148 @@ pub const Lkml = struct {
 };
 
 pub const View = struct {
+    arena: *std.heap.ArenaAllocator,
     allocator: Allocator,
+    map_strings: std.StringHashMap(*[]const u8),
+    map_string_lists: std.StringHashMap(*[][]const u8),
+    map_fields: std.StringHashMap(*[]Field),
+    map_derived_table: std.StringHashMap(*DerivedTable),
     name: []const u8,
     label: []const u8,
     extension: []const u8,
-    sqlTableName: []const u8,
-    drillFields: []const u8,
-    suggestions: bool,
-    fieldsHiddenByDefault: bool,
+    sql_table_name: []const u8,
+    drill_fields: []const u8,
+    suggestions: []const u8,
+    fields_hidden_by_default: []const u8,
     extends: [][]const u8,
-    requiredAccessGrants: [][]const u8,
-    derivedTable: DerivedTable,
+    required_access_grants: [][]const u8,
     dimensions: []Field,
+    dimension_groups: []Field,
+    filters: []Field,
+    parameters: []Field,
+    measures: []Field,
+    derived_table: DerivedTable,
 
-    pub const StringAttribute = enum {
-        Name,
-        Label,
-        // Description,
-        Extension,
-        SqlTableName,
-        DrillFields,
-    };
-
-    pub fn init(allocator: Allocator, name: []const u8) !View {
-        return .{
+    pub fn init(parent_allocator: Allocator, name: []const u8) !View {
+        var arena = try parent_allocator.create(std.heap.ArenaAllocator);
+        arena.* = std.heap.ArenaAllocator.init(parent_allocator);
+        const allocator = arena.allocator();
+        defer arena.deinit();
+        
+        return View{
+            .arena = arena,
             .allocator = allocator,
+            .map_strings = std.StringHashMap(*[]const u8).init(allocator),
+            .map_string_lists = std.StringHashMap(*[][]const u8).init(allocator),
+            .map_fields = std.StringHashMap(*[]Field).init(allocator),
+            .map_derived_table = std.StringHashMap(*DerivedTable).init(allocator),
             .name = name,
             .label = "",
             .extension = "",
-            .sqlTableName = "",
-            .drillFields = "",
-            .suggestions = true,
-            .fieldsHiddenByDefault = false,
+            .sql_table_name = "",
+            .drill_fields = "",
+            .suggestions = "",
+            .fields_hidden_by_default = "",
             .extends = try allocator.alloc([]const u8, 0),
-            .requiredAccessGrants = try allocator.alloc([]const u8, 0),
-            .derivedTable = try DerivedTable.init(allocator),
+            .required_access_grants = try allocator.alloc([]const u8, 0),
             .dimensions = try allocator.alloc(Field, 0),
+            .dimension_groups = try allocator.alloc(Field, 0),
+            .filters = try allocator.alloc(Field, 0),
+            .parameters = try allocator.alloc(Field, 0),
+            .measures = try allocator.alloc(Field, 0),
+            .derived_table = try DerivedTable.init(allocator),
         };
     }
 
-    pub fn stringify(self: View) !void {
-        print("{{", .{});
-        print("\"name\": \"{s}\"", .{self.name});
-        try printComma();
-        print("\"label\": \"{s}\"", .{self.label});
-        try printComma();
-        print("\"extension\": \"{s}\"", .{self.extension});
-        try printComma();
-        print("\"sql_table_name\": \"{s}\"", .{self.sqlTableName});
-        try printComma();
-        print("\"drill_fields\": \"{s}\"", .{self.drillFields});
-        try printComma();
-        print("\"suggestions\": \"{s}\"", .{try getYesNo(self.suggestions)});
-        try printComma();
-        print("\"fields_hidden_by_default\": \"{s}\"", .{try getYesNo(self.fieldsHiddenByDefault)});
-        try printComma();
-        print("\"extends\": ", .{});
-        try printStrings(self.extends);
-        try printComma();
-        print("\"required_access_grants\": ", .{});
-        try printStrings(self.requiredAccessGrants);
-        try printComma();
-        print("\"dimensions\":", .{});
-        try printObjects(Field, self.dimensions);
-        // try self.derivedTable.stringify();
-        print("}}", .{});
+    pub fn initFieldMap(self: *View) !void {
+        // strings
+        try self.map_strings.put("name", &self.name);
+        try self.map_strings.put("label", &self.label);
+        try self.map_strings.put("extension", &self.extension);
+        try self.map_strings.put("sql_table_name", &self.sql_table_name);
+        try self.map_strings.put("drill_fields", &self.drill_fields);
+        try self.map_strings.put("suggestions", &self.suggestions);
+        try self.map_strings.put("fields_hidden_by_default", &self.fields_hidden_by_default);
+
+        // string list
+        try self.map_string_lists.put("extends", &self.extends);
+        try self.map_string_lists.put("required_access_grants", &self.required_access_grants);
+
+        // field list
+        try self.map_fields.put("dimensions", &self.dimensions);
+        try self.map_fields.put("dimension_groups", &self.dimension_groups);
+        try self.map_fields.put("filters", &self.filters);
+        try self.map_fields.put("parameters", &self.parameters);
+        try self.map_fields.put("measures", &self.measures);
+
+        // custom
+        try self.map_derived_table.put("derived_table", &self.derived_table);
     }
 
-    pub fn setStringAttribute(self: *View, attribute: StringAttribute, val: []const u8) !void {
-        switch (attribute) {
-            .Name => self.name = val,
-            .Label => self.label = val,
-            // .Description => self.description = val,
-            .Extension => self.extension = val,
-            .SqlTableName => self.sqlTableName = val,
-            .DrillFields => self.drillFields = val,
+    pub fn asString(self: *View, T: type, field: T) ![]const u8 {
+        _ = self;
+        if (T == []const u8) {
+            return field;
         }
+        return "";
     }
 
-    pub fn addLabel(self: *View, val: []const u8) !void {
-        self.label = val;
+    pub fn stringify(self: *View) ![]const u8 {
+        const self_as_string: []const u8 = try std.fmt.allocPrint(
+            self.allocator,
+            "{{" ++
+                "\"name\": \"{s}\"," ++
+                "\"label\": \"{s}\"," ++
+                "\"extension\": \"{s}\"," ++
+                "\"sql_table_name\": \"{s}\"," ++
+                "\"drill_fields\": \"{s}\"," ++
+                "\"suggestions\": \"{s}\"," ++
+                "\"fields_hidden_by_default\": \"{s}\"," ++
+                "\"extends\": \"{s}\"," ++
+                "\"required_access_grants\": \"{s}\"," ++
+                "\"dimensions\": \"{s}\"," ++
+                "\"dimension_groups\": \"{s}\"," ++
+                "\"filters\": \"{s}\"," ++
+                "\"parameters\": \"{s}\"," ++
+                "\"measures\": \"{s}\"," ++
+                "\"derived_table\": \"{s}\"," ++
+            "}}",
+            .{
+                try self.asString([]const u8, self.name),
+                try self.asString([]const u8, self.label),
+                try self.asString([]const u8, self.extension),
+                try self.asString([]const u8, self.sql_table_name),
+                try self.asString([]const u8, self.drill_fields),
+                try self.asString([]const u8, self.suggestions),
+                try self.asString([]const u8, self.fields_hidden_by_default),
+                try self.asString([][]const u8, self.extends),
+                try self.asString([][]const u8, self.required_access_grants),
+                try self.asString([]Field, self.dimensions),
+                try self.asString([]Field, self.dimension_groups),
+                try self.asString([]Field, self.filters),
+                try self.asString([]Field, self.parameters),
+                try self.asString([]Field, self.measures),
+                try self.asString(DerivedTable, self.derived_table),
+            }
+        );
+        return self_as_string;
     }
 
-    pub fn addDimension(self: *View, dim: Field) !void {
-        const T = @TypeOf(dim);
-        self.dimensions = try self.add([]T, T, self.dimensions, dim);
+    pub fn update(self: *View, key: []const u8, val: []const u8, valType: []const u8, opt_field: ?Field) !void {
+        if (self.map_strings.contains(key)) {
+            const field_pointer = self.map_strings.get(key) orelse return error.UnknownField;
+            field_pointer.* = val;
+            return;
+        }
+        // if (self.map_string_lists.contains(key)) {
+        //     const field_pointer = self.map_string_lists.get(key) orelse return error.UnknownField;
+        //     field_pointer.* = try self.add(@TypeOf(field_pointer.*),@TypeOf(val),field_pointer.*,val);
+        //     return;
+        // }
+        if (opt_field) |field| {
+            _ = field;
+            _ = valType;
+        }
     }
 
     fn add(self: *View, srcType: type, itemType: type, src: srcType, item: itemType) !srcType {
@@ -307,6 +378,15 @@ pub const View = struct {
         more[src.len] = item;
         self.allocator.free(src);
         return more;
+    }
+
+    pub fn deinit(self: *View, parent_allocator: Allocator) !void {
+        self.allocator.free(self.map_string_lists);
+        self.allocator.free(self.map_fields);
+        self.allocator.free(self.map_strings);
+        self.allocator.free(self.map_derived_table);
+        self.arena.deinit();
+        parent_allocator.destroy(self.arena);
     }
 };
 
@@ -360,7 +440,7 @@ pub const DerivedTable = struct {
     }
 
     pub fn stringify() !void {
-        print("Derived Table", .{});
+        std.debug.print("Derived Table", .{});
     }
 };
 
@@ -381,7 +461,7 @@ pub const Field = struct {
         };
     }
     pub fn stringify(self: Field) !void {
-        print("{{\"name\": \"{s}\"}}", .{self.name});
+        std.debug.print("{{\"name\": \"{s}\"}}", .{self.name});
     }
 };
 
@@ -396,10 +476,6 @@ pub const Explore = struct {
         };
     }
 };
-
-pub fn isEven(n: u32) bool {
-    return n & 1 == 0;
-}
 
 pub const Parser = struct {
     allocator: Allocator,
@@ -565,6 +641,11 @@ pub const Parser = struct {
             // curly braces close
             if (char == 125) {
                 self.removeOutputLastChars(1);
+                const key: []const u8 = "0";
+                try self.updateKey(key);
+                printBuff = try std.fmt.allocPrint(self.allocator, "\n<{s}>##!util", .{self.key});
+                try self.addOutput(printBuff[0..], 0);
+
                 self.depth -= 1;
                 if (self.isVariable) {
                     self.isVariable = false;
@@ -635,7 +716,7 @@ pub const Parser = struct {
     }
 };
 
-pub fn equalStrings(a: []const u8, b: []const u8) bool {
+pub fn eq(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
 }
 
@@ -643,7 +724,6 @@ pub const KeyValue = struct{
     key: []const u8,
     val: []const u8,
 };
-
 
 
 fn isInList(list: std.ArrayList([]const u8), item: []const u8) bool {
@@ -654,33 +734,6 @@ fn isInList(list: std.ArrayList([]const u8), item: []const u8) bool {
     }
     return false;
 }
-
-// pub const Lkml = struct {
-//     allocator: Allocator,
-//     // objects: std.ArrayList(KeyValue),
-//     keys: std.StringHashMap([]const u8),
-
-//     pub fn init(allocator: Allocator) !Lkml {
-//         return .{
-//             .allocator = allocator,
-//             // .objects = std.ArrayList(KeyValue).init(allocator),
-//             .keys = std.StringHashMap([]const u8).init(allocator),
-//         };
-//     }
-
-//     pub fn add(self: *Lkml, depth: usize, key: []const u8, val: []const u8, valType: []const u8) !void {
-//         print("{any}, {s}, {s}, {s}", .{depth, key, val, valType});
-//         if (depth == 0 and self.keys.contains(key)) {
-
-//         } else {
-//             // const keyValue = KeyValue{.key = key, .val = val};
-//             try self.keys.put(key, val);
-//         }
-//         // try self.objects.append(keyValue); 
-//     }
-// };
-
-
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -703,14 +756,8 @@ pub fn main() !void {
         try parser.parse(char[0]);
     }
     const parsed: []u8 = parser.output;
-
-    // print("{s}", .{parsed});
-    var output: []u8 = &[_]u8{};
     var mainSplit = std.mem.splitSequence(u8, parsed, "<.");
     
-    
-    output = try std.fmt.allocPrint(allocator, "{s}{s}", .{output,"{"});
-    defer allocator.free(output);
     while (mainSplit.next()) |item| {
         var itemSplit = std.mem.splitSequence(u8, item, ">");
         if (itemSplit.next()) |key| {
@@ -718,34 +765,14 @@ pub fn main() !void {
             if (itemSplit.next()) |valWrapper| {
                 var valSplit = std.mem.splitSequence(u8, valWrapper, "#!");
                 if (valSplit.next()) |val| {
-                    // print("{s}\n", .{val});
                     if (valSplit.next()) |valType| {
                         try lkml.addItem(depth, key, val, valType);
-                        // print("type: {s}\n", .{valType});
                     }
                 }
             }
-
-            if (depth == 0 and isValidKey(key, &lkmlParams)) {
-                
-            }
-            // print("{s}({any})\n", .{key, depth});
-            // var keySplit()
         }
-       
-        
-        // print("{s}\n", .{item});
     }
-    output = try std.fmt.allocPrint(allocator, "{s}{s}", .{output,"}"});
-
-    // _ = try getKeyValues(allocator, parsed, 0, &lkml);
     
-    lkml.stringify();
-
-    // print("{s}", .{output});
-    // var it = lkml.keys.valueIterator();
-    // while (it.next()) |key| {
-    //     print("{s}\n", .{key});
-    // }
+    try lkml.stringify();
 
 }
