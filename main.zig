@@ -1,26 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const stdout = std.io.getStdOut().writer();
-// const print = std.debug.print;
+const print = std.debug.print;
 
 const keyValueDelimiter = "|||";
-
-// const LkmlObject = union(enum) {
-//     lkml: Lkml,
-//     view: View,
-//     explore: Explore,
-// };
-
-// pub const AddItemReturnType = struct{
-//     name: []const u8,
-//     object: LkmlObject
-// };
-
-// pub const DepthLookup = enum(u2) {
-//     Zero = 0,
-//     One = 1,
-//     Two = 2,
-// };
 
 var lkmlParams = [_][]const u8{ "view", "explore", "include", "extends" };
 var viewParams = [_][]const u8{ "label", "extension", "sql_table_name", "drill_fields", "suggestions", "fields_hidden_by_default", "extends", "required_access_grants", "derived_table", "filter", "parameter", "dimension", "dimension_group", "measure", "set" };
@@ -38,37 +21,37 @@ pub fn isValidKey(needle: []const u8, haystack: [][]const u8) bool {
 pub fn printStrings(items: [][]const u8) !void {
     const count = items.len;
     var i: i8 = 1;
-    std.debug.print("[", .{});
+    print("[", .{});
     for (items) |item| {
-        std.debug.print("\"{s}\"", .{item});
+        print("\"{s}\"", .{item});
         if (i < count) {
             try printComma();
         }
         i += 1;
     }
-    std.debug.print("]", .{});
+    print("]", .{});
 }
 
 pub fn printObjects(T: type, items: []T) !void {
     // _ = items;
     // const count = items.len;
     // var i: i8 = 1;
-    std.debug.print("[", .{});
+    print("[", .{});
     for (items) |item| {
-        std.debug.print("###type: {any}", .{@TypeOf(item)});
+        print("###type: {any}", .{@TypeOf(item)});
         // const dereferenced = item.*;
-        // std.debug.print("##{s}\n", .{dereferenced.label});
+        // print("##{s}\n", .{dereferenced.label});
         // try item.stringify();
         // if (i < count) {
         //     try printComma();
         // }
         // i += 1;
     }
-    std.debug.print("] ", .{});
+    print("] ", .{});
 }
 
 pub fn printComma() !void {
-    std.debug.print(", ", .{});
+    print(", ", .{});
 }
 
 pub fn getYesNo(boolean: bool) ![]const u8 {
@@ -78,7 +61,7 @@ pub fn getYesNo(boolean: bool) ![]const u8 {
     };
 }
 
-pub fn trimString(chars: []u8) []const u8 {
+pub fn trimString(chars: []const u8) []const u8 {
     return std.mem.trim(u8, chars, "\n ");
 }
 
@@ -96,7 +79,6 @@ pub const Lkml = struct {
     allocator: Allocator,
     filename: []const u8,
     includes: [][]const u8,
-    extends: [][]const u8,
     views: []*View,
     explores: []Explore,
     objectIndex: usize,
@@ -112,7 +94,6 @@ pub const Lkml = struct {
             .allocator = allocator,
             .filename = filename,
             .includes = try allocator.alloc([]const u8, 0),
-            .extends = try allocator.alloc([]const u8, 0),
             .views = try allocator.alloc(*View, 0),
             .explores = try allocator.alloc(Explore, 0),
             .objectIndex = 0,
@@ -122,41 +103,28 @@ pub const Lkml = struct {
 
     pub fn stringify(self: *Lkml) !void {
         try printComma();
-        std.debug.print("\"filename\": \"{s}\", ", .{self.filename});
-        std.debug.print("\"includes\": ", .{});
+        print("\"filename\": \"{s}\", ", .{self.filename});
+        print("\"includes\": ", .{});
         try printStrings(self.includes);
         try printComma();
-        std.debug.print("\"views\": ", .{});
-        std.debug.print("{s}", .{self.views_as_string});
-        // for (self.views) |view| {
-        //     try view.stringify();
-        //     // std.debug.print("###{s}\n", .{view.label});
-        // }
-        // try printObjects(*View, self.views);
+        print("\"views\": ", .{});
+        print("{s}", .{self.views_as_string});
     }
 
     pub fn addInclude(self: *Lkml, include: []const u8) !void {
-        const T = @TypeOf(include);
-        self.includes = try self.add([]T, T, self.includes, include);
-    }
-
-    pub fn addExtend(self: *Lkml, extend: []const u8) !void {
-        const T = @TypeOf(extend);
-        self.extends = try self.add([]T, T, self.extends, extend);
+        self.includes = try self.add([][]const u8, []const u8, self.includes, include);
     }
 
     pub fn addView(self: *Lkml, view: *View) !void {
-        const T = @TypeOf(view);
-        self.views = try self.add([]T, T, self.views, view);
+        self.views = try self.add([]*View, *View, self.views, view);
     }
 
     pub fn addExplore(self: *Lkml, explore: Explore) !void {
-        const T = @TypeOf(explore);
-        self.explores = try self.add([]T, T, self.explores, explore);
+        self.explores = try self.add([]Explore, Explore, self.explores, explore);
     }
 
     pub fn addItem(self: *Lkml, depth: usize, key: []const u8, val: []const u8, valType: []const u8) !void {
-        // std.debug.print("{any}, {s}, {s}, {s}", .{depth, key, val, valType});
+        // print("{any}, {s}, {s}, {s}", .{depth, key, val, valType});
         var objectType: []const u8 = undefined;
         var fieldKey: []const u8 = undefined;
         var param: []const u8 = undefined;
@@ -164,9 +132,6 @@ pub const Lkml = struct {
         if (depth == 0) {
             if (eq(key, "include")) {
                 try self.addInclude(val);
-            }
-            if (eq(key, "extend")) {
-                try self.addExtend(val);
             }
             if (eq(key, "view")) {
                 var view = try View.init(self.allocator, val);
@@ -181,7 +146,6 @@ pub const Lkml = struct {
             }
             return;
         }
-        // std.debug.print("#$%{s}\n", .{key});
         if (depth == 1) {
             
             if (keySplit.next()) |res| {
@@ -306,11 +270,24 @@ pub const View = struct {
     }
 
     pub fn asString(self: *View, T: type, field: T) ![]const u8 {
-        _ = self;
         if (T == []const u8) {
             return field;
         }
-        return "";
+        if (T == [][]const u8) {
+            var result: []const u8 = "";
+            var count: u32 = 0;
+            for (field) |item| {
+                if (count == 0) {
+                    result = try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{item});
+                }
+                else {
+                    result = try std.fmt.allocPrint(self.allocator, "{s},\"{s}\"", .{result, item});
+                }
+                count += 1;
+            }            
+            return result;
+        }
+        return "123";
     }
 
     pub fn stringify(self: *View) ![]const u8 {
@@ -324,14 +301,14 @@ pub const View = struct {
                 "\"drill_fields\": \"{s}\"," ++
                 "\"suggestions\": \"{s}\"," ++
                 "\"fields_hidden_by_default\": \"{s}\"," ++
-                "\"extends\": \"{s}\"," ++
-                "\"required_access_grants\": \"{s}\"," ++
-                "\"dimensions\": \"{s}\"," ++
-                "\"dimension_groups\": \"{s}\"," ++
-                "\"filters\": \"{s}\"," ++
-                "\"parameters\": \"{s}\"," ++
-                "\"measures\": \"{s}\"," ++
-                "\"derived_table\": \"{s}\"," ++
+                "\"extends\": [{s}]," ++
+                "\"required_access_grants\": [{s}]," ++
+                "\"dimensions\": [{s}]," ++
+                "\"dimension_groups\": [{s}]," ++
+                "\"filters\": [{s}]," ++
+                "\"parameters\": [{s}]," ++
+                "\"measures\": [{s}]," ++
+                "\"derived_table\": [{s}]," ++
             "}}",
             .{
                 try self.asString([]const u8, self.name),
@@ -360,11 +337,14 @@ pub const View = struct {
             field_pointer.* = val;
             return;
         }
-        // if (self.map_string_lists.contains(key)) {
-        //     const field_pointer = self.map_string_lists.get(key) orelse return error.UnknownField;
-        //     field_pointer.* = try self.add(@TypeOf(field_pointer.*),@TypeOf(val),field_pointer.*,val);
-        //     return;
-        // }
+        if (self.map_string_lists.contains(key)) {
+            const field_pointer = self.map_string_lists.get(key) orelse return error.UnknownField;
+            var valSplit = std.mem.splitSequence(u8, val, "|,|");
+            while (valSplit.next()) |listItem| {
+                field_pointer.* = try self.add(@TypeOf(field_pointer.*),[]const u8,field_pointer.*, trimString(listItem));
+            }
+            return;
+        }
         if (opt_field) |field| {
             _ = field;
             _ = valType;
@@ -440,7 +420,7 @@ pub const DerivedTable = struct {
     }
 
     pub fn stringify() !void {
-        std.debug.print("Derived Table", .{});
+        print("Derived Table", .{});
     }
 };
 
@@ -461,7 +441,7 @@ pub const Field = struct {
         };
     }
     pub fn stringify(self: Field) !void {
-        std.debug.print("{{\"name\": \"{s}\"}}", .{self.name});
+        print("{{\"name\": \"{s}\"}}", .{self.name});
     }
 };
 
@@ -569,10 +549,11 @@ pub const Parser = struct {
         var printBuff = try std.fmt.allocPrint(self.allocator, "{s}", .{charString});
         try self.addOutput(printBuff[0..], 0);
         // list item
-        // if (self.isBrackets and char == 44) {
-        //     printBuff = try std.fmt.allocPrint(self.allocator, "<list-item-end>", .{});
-        //     try self.addOutput(printBuff[0..], 0);
-        // }
+        if (self.isBrackets and char == 44) {
+            self.removeOutputLastChars(1);
+            printBuff = try std.fmt.allocPrint(self.allocator, "|,|", .{});
+            try self.addOutput(printBuff[0..], 0);
+        }
         // value close
         if (self.isValue and (
             (!self.isSql and self.valueTerminatorChar == char)
@@ -590,6 +571,7 @@ pub const Parser = struct {
             // brackets close
             if (self.isBrackets) {
                 self.isBrackets = false;
+                self.removeOutputLastChars(1);
                 printBuff = try std.fmt.allocPrint(self.allocator, "#!list", .{});
                 try self.addOutput(printBuff[0..], 0);
             }
@@ -678,6 +660,7 @@ pub const Parser = struct {
                 self.isBrackets = true;
                 self.valueTerminatorChar = 93;
                 self.chars = &[_]u8{};
+                self.removeOutputLastChars(1);
                 // printBuff = try std.fmt.allocPrint(self.allocator, "<list-start>", .{});
                 // try self.addOutput(printBuff[0..], 0);
                 return;
@@ -756,6 +739,7 @@ pub fn main() !void {
         try parser.parse(char[0]);
     }
     const parsed: []u8 = parser.output;
+    // print("{s}", .{parsed});
     var mainSplit = std.mem.splitSequence(u8, parsed, "<.");
     
     while (mainSplit.next()) |item| {
