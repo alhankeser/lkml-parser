@@ -126,7 +126,7 @@ pub const Lkml = struct {
     pub fn addItem(self: *Lkml, depth: usize, key: []const u8, val: []const u8, valType: []const u8) !void {
         // print("{any}, {s}, {s}, {s}", .{depth, key, val, valType});
         var objectType: []const u8 = undefined;
-        var fieldKey: []const u8 = undefined;
+        var objectField: []const u8 = undefined;
         var param: []const u8 = undefined;
         var keySplit = std.mem.splitSequence(u8, key, ".");
         if (depth == 0) {
@@ -150,7 +150,10 @@ pub const Lkml = struct {
             objectType = res;
         }
         if (keySplit.next()) |res| {
-            fieldKey = res;
+            objectField = res;
+        }
+        if (keySplit.next()) |res| {
+            param = res;
         }
 
         const isView = eq(objectType, "view");
@@ -160,22 +163,30 @@ pub const Lkml = struct {
             const object = self.views[self.objectIndex];
             var field = try Field.init(self.allocator, val);
             try field.initFieldMap();
-            try object.update(fieldKey, val, valType, field);
+            try object.update(objectField, val, valType, field);
             // end of object
-            if (fieldKey[0] == 48) {
+            if (objectField[0] == 48) {
                 const object_as_string = try object.stringify();
                 self.views_as_string = try std.fmt.allocPrint(self.allocator, "{s},{s}", .{ self.views_as_string, object_as_string });
             }
             return;
         }
 
-        if (depth == 1 and isExplore and eq(fieldKey, "name")) {
+        if (depth == 1 and isExplore and eq(objectField, "name")) {
             self.explores[self.objectIndex].name = val;
             return;
         }
 
-        if (depth == 2 and eq(fieldKey, "dimension")) {
+        if (depth == 2) {
+            const object = self.views[self.objectIndex];
+            var field = object.dimensions[object.dimensions.len - 1];
+            try field.update(trimString(param), trimString(val), valType);
             // Update field
+            if (param[0] == 48) {
+                const field_as_string = try field.stringify();
+                object.dimensions_as_string = try std.fmt.allocPrint(self.allocator, "{s},{s}", .{ object.dimensions_as_string, field_as_string });
+                // print("$$${s}\n", .{object.dimensions_as_string});
+            }
             param = "";
         }
     }
@@ -296,42 +307,56 @@ pub const View = struct {
             }
             return result;
         }
+        if (T == []Field) {
+            var result: []const u8 = "";
+            var count: u32 = 0;
+            for (field) |item| {
+                if (count == 0) {
+                    result = try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{try item.stringify()});
+                } else {
+                    result = try std.fmt.allocPrint(self.allocator, "{s},\"{s}\"", .{ result, try item.stringify() });
+                }
+                count += 1;
+            }
+            return result;
+        }
         return "123";
     }
 
     pub fn stringify(self: *View) ![]const u8 {
         const self_as_string: []const u8 = try std.fmt.allocPrint(self.allocator, "{{" ++
-            "\"name\": \"{s}\"," ++
-            "\"label\": \"{s}\"," ++
-            "\"extension\": \"{s}\"," ++
-            "\"sql_table_name\": \"{s}\"," ++
-            "\"drill_fields\": \"{s}\"," ++
-            "\"suggestions\": \"{s}\"," ++
-            "\"fields_hidden_by_default\": \"{s}\"," ++
-            "\"extends\": [{s}]," ++
-            "\"required_access_grants\": [{s}]," ++
+            // "\"name\": \"{s}\"," ++
+            // "\"label\": \"{s}\"," ++
+            // "\"extension\": \"{s}\"," ++
+            // "\"sql_table_name\": \"{s}\"," ++
+            // "\"drill_fields\": \"{s}\"," ++
+            // "\"suggestions\": \"{s}\"," ++
+            // "\"fields_hidden_by_default\": \"{s}\"," ++
+            // "\"extends\": [{s}]," ++
+            // "\"required_access_grants\": [{s}]," ++
             "\"dimensions\": [{s}]," ++
-            "\"dimension_groups\": [{s}]," ++
-            "\"filters\": [{s}]," ++
-            "\"parameters\": [{s}]," ++
-            "\"measures\": [{s}]," ++
-            "\"derived_table\": [{s}]," ++
+            // "\"dimension_groups\": [{s}]," ++
+            // "\"filters\": [{s}]," ++
+            // "\"parameters\": [{s}]," ++
+            // "\"measures\": [{s}]," ++
+            // "\"derived_table\": [{s}]," ++
             "}}", .{
-            try self.asString([]const u8, self.name),
-            try self.asString([]const u8, self.label),
-            try self.asString([]const u8, self.extension),
-            try self.asString([]const u8, self.sql_table_name),
-            try self.asString([]const u8, self.drill_fields),
-            try self.asString([]const u8, self.suggestions),
-            try self.asString([]const u8, self.fields_hidden_by_default),
-            try self.asString([][]const u8, self.extends),
-            try self.asString([][]const u8, self.required_access_grants),
-            try self.asString([]Field, self.dimensions),
-            try self.asString([]Field, self.dimension_groups),
-            try self.asString([]Field, self.filters),
-            try self.asString([]Field, self.parameters),
-            try self.asString([]Field, self.measures),
-            try self.asString(DerivedTable, self.derived_table),
+            // try self.asString([]const u8, self.name),
+            // try self.asString([]const u8, self.label),
+            // try self.asString([]const u8, self.extension),
+            // try self.asString([]const u8, self.sql_table_name),
+            // try self.asString([]const u8, self.drill_fields),
+            // try self.asString([]const u8, self.suggestions),
+            // try self.asString([]const u8, self.fields_hidden_by_default),
+            // try self.asString([][]const u8, self.extends),
+            // try self.asString([][]const u8, self.required_access_grants),
+            // try self.asString([]Field, self.dimensions),
+            try self.asString([]const u8, self.dimensions_as_string),
+            // try self.asString([]Field, self.dimension_groups),
+            // try self.asString([]Field, self.filters),
+            // try self.asString([]Field, self.parameters),
+            // try self.asString([]Field, self.measures),
+            // try self.asString(DerivedTable, self.derived_table),
         });
         return self_as_string;
     }
@@ -441,28 +466,223 @@ pub const Field = struct {
     allocator: Allocator,
     map_strings: std.StringHashMap(*[]const u8),
     name: []const u8,
+    action: []const u8,
+    alias: []const u8,
+    allow_approximate_optimization: []const u8,
+    allow_fill: []const u8,
+    allowed_value: []const u8,
+    alpha_sort: []const u8,
+    approximate: []const u8,
+    approximate_threshold: []const u8,
+    bypass_suggest_restrictions: []const u8,
+    can_filter: []const u8,
+    case: []const u8,
+    case_sensitive: []const u8,
+    convert_tz: []const u8,
+    datatype: []const u8,
+    default_value: []const u8,
+    description: []const u8,
+    direction: []const u8,
+    drill_fields: []const u8,
+    end_location_field: []const u8,
+    fanout_on: []const u8,
+    fields: []const u8,
+    filters: []const u8,
+    full_suggestions: []const u8,
+    group_item_label: []const u8,
+    group_label: []const u8,
+    hidden: []const u8,
+    html: []const u8,
+    intervals: []const u8,
+    label: []const u8,
+    label_from_parameter: []const u8,
+    link: []const u8,
+    list_field: []const u8,
+    map_layer_name: []const u8,
+    order_by_field: []const u8,
+    percentile: []const u8,
+    precision: []const u8,
+    primary_key: []const u8,
+    required_access_grants: []const u8,
+    required_fields: []const u8,
+    skip_drill_filter: []const u8,
     sql: []const u8,
+    sql_distinct_key: []const u8,
+    sql_end: []const u8,
+    sql_latitude: []const u8,
+    sql_longitude: []const u8,
+    sql_start: []const u8,
+    start_location_field: []const u8,
+    string_datatype: []const u8,
+    style: []const u8,
+    suggest_dimension: []const u8,
+    suggest_explore: []const u8,
+    suggest_persist_for: []const u8,
+    suggestable: []const u8,
+    suggestions: []const u8,
+    tags: []const u8,
+    tiers: []const u8,
+    timeframes: []const u8,
+    type_name: []const u8,
+    units: []const u8,
+    value_format: []const u8,
+    value_format_name: []const u8,
+    view_label: []const u8,
 
     pub fn init(allocator: Allocator, name: []const u8) !Field {
         return .{
             .allocator = allocator,
             .map_strings = std.StringHashMap(*[]const u8).init(allocator),
             .name = name,
+            .action = "",
+            .alias = "",
+            .allow_approximate_optimization = "",
+            .allow_fill = "",
+            .allowed_value = "",
+            .alpha_sort = "",
+            .approximate = "",
+            .approximate_threshold = "",
+            .bypass_suggest_restrictions = "",
+            .can_filter = "",
+            .case = "",
+            .case_sensitive = "",
+            .convert_tz = "",
+            .datatype = "",
+            .default_value = "",
+            .description = "",
+            .direction = "",
+            .drill_fields = "",
+            .end_location_field = "",
+            .fanout_on = "",
+            .fields = "",
+            .filters = "",
+            .full_suggestions = "",
+            .group_item_label = "",
+            .group_label = "",
+            .hidden = "",
+            .html = "",
+            .intervals = "",
+            .label = "",
+            .label_from_parameter = "",
+            .link = "",
+            .list_field = "",
+            .map_layer_name = "",
+            .order_by_field = "",
+            .percentile = "",
+            .precision = "",
+            .primary_key = "",
+            .required_access_grants = "",
+            .required_fields = "",
+            .skip_drill_filter = "",
             .sql = "",
+            .sql_distinct_key = "",
+            .sql_end = "",
+            .sql_latitude = "",
+            .sql_longitude = "",
+            .sql_start = "",
+            .start_location_field = "",
+            .string_datatype = "",
+            .style = "",
+            .suggest_dimension = "",
+            .suggest_explore = "",
+            .suggest_persist_for = "",
+            .suggestable = "",
+            .suggestions = "",
+            .tags = "",
+            .tiers = "",
+            .timeframes = "",
+            .type_name = "",
+            .units = "",
+            .value_format = "",
+            .value_format_name = "",
+            .view_label = "",
         };
     }
 
     pub fn initFieldMap(self: *Field) !void {
+        // try self.map_strings.put("action", &self.action);
+        // try self.map_strings.put("alias", &self.alias);
+        // try self.map_strings.put("allow_approximate_optimization", &self.allow_approximate_optimization);
+        // try self.map_strings.put("allow_fill", &self.allow_fill);
+        // try self.map_strings.put("allowed_value", &self.allowed_value);
+        // try self.map_strings.put("alpha_sort", &self.alpha_sort);
+        // try self.map_strings.put("approximate", &self.approximate);
+        // try self.map_strings.put("approximate_threshold", &self.approximate_threshold);
+        // try self.map_strings.put("bypass_suggest_restrictions", &self.bypass_suggest_restrictions);
+        // try self.map_strings.put("can_filter", &self.can_filter);
+        // try self.map_strings.put("case", &self.case);
+        // try self.map_strings.put("case_sensitive", &self.case_sensitive);
+        // try self.map_strings.put("convert_tz", &self.convert_tz);
+        // try self.map_strings.put("datatype", &self.datatype);
+        // try self.map_strings.put("default_value", &self.default_value);
+        // try self.map_strings.put("description", &self.description);
+        // try self.map_strings.put("direction", &self.direction);
+        // try self.map_strings.put("drill_fields", &self.drill_fields);
+        // try self.map_strings.put("end_location_field", &self.end_location_field);
+        // try self.map_strings.put("fanout_on", &self.fanout_on);
+        // try self.map_strings.put("fields", &self.fields);
+        // try self.map_strings.put("filters", &self.filters);
+        // try self.map_strings.put("full_suggestions", &self.full_suggestions);
+        // try self.map_strings.put("group_item_label", &self.group_item_label);
+        // try self.map_strings.put("group_label", &self.group_label);
+        // try self.map_strings.put("hidden", &self.hidden);
+        // try self.map_strings.put("html", &self.html);
+        // try self.map_strings.put("intervals", &self.intervals);
+        // try self.map_strings.put("label", &self.label);
+        // try self.map_strings.put("label_from_parameter", &self.label_from_parameter);
+        // try self.map_strings.put("link", &self.link);
+        // try self.map_strings.put("list_field", &self.list_field);
+        // try self.map_strings.put("map_layer_name", &self.map_layer_name);
+        // try self.map_strings.put("order_by_field", &self.order_by_field);
+        // try self.map_strings.put("percentile", &self.percentile);
+        // try self.map_strings.put("precision", &self.precision);
+        // try self.map_strings.put("primary_key", &self.primary_key);
+        // try self.map_strings.put("required_access_grants", &self.required_access_grants);
+        // try self.map_strings.put("required_fields", &self.required_fields);
+        // try self.map_strings.put("skip_drill_filter", &self.skip_drill_filter);
         try self.map_strings.put("sql", &self.sql);
+        // try self.map_strings.put("sql_distinct_key", &self.sql_distinct_key);
+        // try self.map_strings.put("sql_end", &self.sql_end);
+        // try self.map_strings.put("sql_latitude", &self.sql_latitude);
+        // try self.map_strings.put("sql_longitude", &self.sql_longitude);
+        // try self.map_strings.put("sql_start", &self.sql_start);
+        // try self.map_strings.put("start_location_field", &self.start_location_field);
+        // try self.map_strings.put("string_datatype", &self.string_datatype);
+        // try self.map_strings.put("style", &self.style);
+        // try self.map_strings.put("suggest_dimension", &self.suggest_dimension);
+        // try self.map_strings.put("suggest_explore", &self.suggest_explore);
+        // try self.map_strings.put("suggest_persist_for", &self.suggest_persist_for);
+        // try self.map_strings.put("suggestable", &self.suggestable);
+        // try self.map_strings.put("suggestions", &self.suggestions);
+        // try self.map_strings.put("tags", &self.tags);
+        // try self.map_strings.put("tiers", &self.tiers);
+        // try self.map_strings.put("timeframes", &self.timeframes);
+        // try self.map_strings.put("type", &self.type_name);
+        // try self.map_strings.put("units", &self.units);
+        // try self.map_strings.put("value_format", &self.value_format);
+        // try self.map_strings.put("value_format_name", &self.value_format_name);
+        // try self.map_strings.put("view_label", &self.view_label);
     }
 
-    pub fn stringify(self: *View) ![]const u8 {
+    pub fn update(self: *Field, key: []const u8, val: []const u8, valType: []const u8) !void {
+        print("key:{s}, val:{s}\n", .{key, val});
+        if (self.map_strings.contains(key)) {
+            print("name:{s}\n", .{self.name});
+            const field_pointer = self.map_strings.get(key) orelse return error.UnknownField;
+            field_pointer.* = val;
+            print("self.sql={s}\n", .{self.sql});
+            return;
+        }
+        _ = valType;
+    }
+
+    pub fn stringify(self: Field) ![]const u8 {
         const self_as_string: []const u8 = try std.fmt.allocPrint(self.allocator, "{{" ++
             "\"name\": \"{s}\"," ++
             "\"sql\": \"{s}\"," ++
             "}}", .{
-            try self.asString([]const u8, self.name),
-            try self.asString([]const u8, self.sql),
+            self.name,
+            self.sql,
         });
         return self_as_string;
     }
