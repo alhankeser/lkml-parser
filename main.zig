@@ -3,32 +3,16 @@ const Allocator = std.mem.Allocator;
 const stdout = std.io.getStdOut().writer();
 const print = std.debug.print;
 
-const keyValueDelimiter = "|||";
-
-// const LkmlObject = union(enum) {
-//     lkml: Lkml,
-//     view: View,
-//     explore: Explore,
-// };
-
-// pub const AddItemReturnType = struct{
-//     name: []const u8,
-//     object: LkmlObject
-// };
-
-// pub const DepthLookup = enum(u2) {
-//     Zero = 0,
-//     One = 1,
-//     Two = 2,
-// };
-
 var lkmlParams = [_][]const u8{ "view:", "explore:", "include:", "extends:" };
 var viewParams = [_][]const u8{ "label:", "extension:", "sql_table_name:", "drill_fields:", "suggestions:", "fields_hidden_by_default:", "extends:", "required_access_grants:", "derived_table:", "filter:", "parameter:", "dimension:", "dimension_group:", "measure:", "set:" };
 var paramNames = [_][]const u8{ "action:", "alias:", "allow_approximate_optimization:", "allow_fill:", "allowed_value:", "alpha_sort:", "approximate:", "approximate_threshold:", "bypass_suggest_restrictions:", "can_filter:", "case:", "case_sensitive:", "convert_tz:", "datatype:", "default_value:", "description:", "direction:", "drill_fields:", "end_location_field:", "fanout_on:", "fields:", "filters:", "full_suggestions:", "group_item_label:", "group_label:", "hidden:", "html:", "intervals:", "label:", "label_from_parameter:", "link:", "list_field:", "map_layer_name:", "order_by_field:", "percentile:", "precision:", "primary_key:", "required_access_grants:", "required_fields:", "skip_drill_filter:", "sql:", "sql_distinct_key:", "sql_end:", "sql_latitude:", "sql_longitude:", "sql_start:", "start_location_field:", "string_datatype:", "style:", "suggest_dimension:", "suggest_explore:", "suggest_persist_for:", "suggestable:", "suggestions:", "tags:", "tiers:", "timeframes:", "type:", "units:", "value_format:", "value_format_name:", "view_label:" };
 
-pub fn isValidKey(needle: []const u8, haystack: [][]const u8) bool {
+var objects = [_][]const u8{"view", "derived_table", "action", "derived_table", "filter", "parameter", "dimension", "dimension_group", "measure", "set"};
+var fields = [_][]const u8{"filter", "parameter", "dimension", "dimension_group", "measure", "set"};
+
+pub fn isInList(needle: []const u8, haystack: [][]const u8) bool {
     for (haystack) |thing| {
-        if (equalStrings(needle, thing)) {
+        if (eq(needle, thing)) {
             return true;
         }
     }
@@ -87,257 +71,10 @@ pub fn keyContainsSql(key: []const u8) bool {
     return false;
 }
 
-pub const Lkml = struct {
-    allocator: Allocator,
-    filename: []const u8,
-    includes: [][]const u8,
-    views: []View,
-    explores: []Explore,
-    latestType: []const u8,
-
-    pub fn init(allocator: Allocator, filename: []const u8) !Lkml {
-        return .{
-            .allocator = allocator,
-            .filename = filename,
-            .includes = try allocator.alloc([]const u8, 0),
-            .views = try allocator.alloc(View, 0),
-            .explores = try allocator.alloc(Explore, 0),
-            .latestType = undefined,
-        };
-    }
-
-    pub fn stringify(self: Lkml) void {
-        try printComma();
-        print("\"filename\": \"{s}\", ", .{self.filename});
-        print("\"includes\": ", .{});
-        try printStrings(self.includes);
-        try printComma();
-        print("\"views\": ", .{});
-        try printObjects(View, self.views);
-    }
-
-    pub fn addInclude(self: *Lkml, include: []const u8) !void {
-        const T = @TypeOf(include);
-        self.includes = try self.add([]T, T, self.includes, include);
-    }
-
-    pub fn addView(self: *Lkml, view: View) !void {
-        const T = @TypeOf(view);
-        self.views = try self.add([]T, T, self.views, view);
-    }
-
-    pub fn addExplore(self: *Lkml, explore: Explore) !void {
-        const T = @TypeOf(explore);
-        self.explores = try self.add([]T, T, self.explores, explore);
-    }
-
-    pub fn addItem(self: *Lkml, keyValue: KeyValue) !void {
-        if (keyValue.depth == 0) {
-            if (equalStrings(keyValue.key, "include")) {
-                try self.addInclude(keyValue.val);
-            }
-            if (equalStrings(keyValue.key, "view")) {
-                const view = try View.init(self.allocator, keyValue.val);
-                try self.addView(view);
-            }
-            if (equalStrings(keyValue.key, "explore")) {
-                const explore = try Explore.init(self.allocator, keyValue.val);
-                try self.addExplore(explore);
-            }
-            self.latestType = keyValue.key;
-            return;
-        }
-        if (keyValue.depth == 1) {
-            if (equalStrings(self.latestType, "view")) {
-                if (equalStrings(keyValue.key, "label")) {
-                    self.views[self.views.len - 1].label = keyValue.val;
-                }
-            }
-        }
-    }
-
-    fn add(self: *Lkml, srcType: type, itemType: type, src: srcType, item: itemType) !srcType {
-        const count = src.len + 1;
-        var more = try self.allocator.alloc(itemType, count);
-        std.mem.copyForwards(itemType, more[0..count], src);
-        more[src.len] = item;
-        self.allocator.free(src);
-        return more;
-    }
-};
-
-pub const View = struct {
-    allocator: Allocator,
-    name: []const u8,
-    label: []const u8,
-    extension: []const u8,
-    sqlTableName: []const u8,
-    drillFields: []const u8,
-    suggestions: bool,
-    fieldsHiddenByDefault: bool,
-    extends: [][]const u8,
-    requiredAccessGrants: [][]const u8,
-    derivedTable: DerivedTable,
-
-    pub const StringAttribute = enum {
-        Name,
-        Label,
-        // Description,
-        Extension,
-        SqlTableName,
-        DrillFields,
-    };
-
-    pub fn init(allocator: Allocator, name: []const u8) !View {
-        return .{
-            .allocator = allocator,
-            .name = name,
-            .label = "",
-            .extension = "",
-            .sqlTableName = "",
-            .drillFields = "",
-            .suggestions = true,
-            .fieldsHiddenByDefault = false,
-            .extends = try allocator.alloc([]const u8, 0),
-            .requiredAccessGrants = try allocator.alloc([]const u8, 0),
-            .derivedTable = try DerivedTable.init(allocator),
-        };
-    }
-
-    pub fn stringify(self: View) !void {
-        print("{{", .{});
-        print("\"name\": \"{s}\"", .{self.name});
-        try printComma();
-        print("\"label\": \"{s}\"", .{self.label});
-        try printComma();
-        print("\"extension\": \"{s}\"", .{self.extension});
-        try printComma();
-        print("\"sql_table_name\": \"{s}\"", .{self.sqlTableName});
-        try printComma();
-        print("\"drill_fields\": \"{s}\"", .{self.drillFields});
-        try printComma();
-        print("\"suggestions\": \"{s}\"", .{try getYesNo(self.suggestions)});
-        try printComma();
-        print("\"fields_hidden_by_default\": \"{s}\"", .{try getYesNo(self.fieldsHiddenByDefault)});
-        try printComma();
-        print("\"extends\": ", .{});
-        try printStrings(self.extends);
-        try printComma();
-        print("\"required_access_grants\": ", .{});
-        try printStrings(self.requiredAccessGrants);
-        // try self.derivedTable.stringify();
-        print("}}", .{});
-    }
-
-    pub fn setStringAttribute(self: *View, attribute: StringAttribute, val: []const u8) !void {
-        switch (attribute) {
-            .Name => self.name = val,
-            .Label => self.label = val,
-            // .Description => self.description = val,
-            .Extension => self.extension = val,
-            .SqlTableName => self.sqlTableName = val,
-            .DrillFields => self.drillFields = val,
-        }
-    }
-
-    pub fn addLabel(self: *View, val: []const u8) !void {
-        self.label = val;
-    }
-
-    fn add(self: *View, srcType: type, itemType: type, src: srcType, item: itemType) !srcType {
-        const count = src.len + 1;
-        var more = try self.allocator.alloc(itemType, count);
-        std.mem.copyForwards(itemType, more[0..count], src);
-        more[src.len] = item;
-        self.allocator.free(src);
-        return more;
-    }
-};
-
-pub const DerivedTable = struct {
-    allocator: Allocator,
-    clusterKeys: [][]const u8,
-    createProcess: []const u8,
-    datagroupTrigger: []const u8,
-    distribution: []const u8,
-    distributionStyle: []const u8,
-    exploreSource: ExploreSource,
-    incrementKey: []const u8,
-    incrementOffset: i16,
-    indexes: [][]const u8,
-    intervalTrigger: []const u8,
-    materializedView: bool,
-    partitionKeys: [][]const u8,
-    persistFor: []const u8,
-    publishAsDbView: bool,
-    sortkeys: [][]const u8,
-    sql: []const u8,
-    sqlCreate: []const u8,
-    sqlTriggerValue: []const u8,
-    tableCompression: []const u8,
-    tableFormat: []const u8,
-
-    pub fn init(allocator: Allocator) !DerivedTable {
-        return .{
-            .allocator = allocator,
-            .clusterKeys = try allocator.alloc([]const u8, 0),
-            .createProcess = "",
-            .datagroupTrigger = "",
-            .distribution = "",
-            .distributionStyle = "",
-            .exploreSource = try ExploreSource.init(),
-            .incrementKey = "",
-            .incrementOffset = undefined,
-            .indexes = try allocator.alloc([]const u8, 0),
-            .intervalTrigger = "",
-            .materializedView = undefined,
-            .partitionKeys = try allocator.alloc([]const u8, 0),
-            .persistFor = "",
-            .publishAsDbView = undefined,
-            .sortkeys = try allocator.alloc([]const u8, 0),
-            .sql = "",
-            .sqlCreate = "",
-            .sqlTriggerValue = "",
-            .tableCompression = "",
-            .tableFormat = "",
-        };
-    }
-
-    pub fn stringify() !void {
-        print("Derived Table", .{});
-    }
-};
-
-pub const ExploreSource = struct {
-    pub fn init() !ExploreSource {
-        return .{};
-    }
-};
-
-pub const Field = struct {
-    pub fn init() !Field {
-        return .{};
-    }
-};
-
-pub const Explore = struct {
-    allocator: Allocator,
-    name: []const u8,
-
-    pub fn init(allocator: Allocator, name: []const u8) !Explore {
-        return .{
-            .allocator = allocator,
-            .name = name,
-        };
-    }
-};
-
-pub fn isEven(n: u32) bool {
-    return n & 1 == 0;
-}
 
 pub const Parser = struct {
     allocator: Allocator,
+    stack: std.ArrayList([]const u8),
     chars: []u8,
     totalChars: u32,
     depth: i8,
@@ -351,10 +88,16 @@ pub const Parser = struct {
     valueTerminatorChar: u8,
     output: []u8,
     key: []u8,
+    currentFieldChars: []u8,
+    currentViewChars: []u8,
+    includes: std.ArrayList([]const u8),
+    views: std.ArrayList([]const u8),
+    fields: std.ArrayList([]const u8),
 
     pub fn init(allocator: Allocator) !Parser {
         return .{
             .allocator = allocator,
+            .stack = std.ArrayList([]const u8).init(allocator),
             .chars = &[_]u8{},
             .totalChars = 0,
             .depth = 0,
@@ -368,6 +111,11 @@ pub const Parser = struct {
             .valueTerminatorChar = 0,
             .output = &[_]u8{},
             .key = &[_]u8{},
+            .currentFieldChars = &[_]u8{},
+            .currentViewChars = &[_]u8{},
+            .includes = std.ArrayList([]const u8).init(allocator),
+            .views = std.ArrayList([]const u8).init(allocator),
+            .fields = std.ArrayList([]const u8).init(allocator),
         };
     }
 
@@ -428,10 +176,10 @@ pub const Parser = struct {
         var printBuff = try std.fmt.allocPrint(self.allocator, "{s}", .{charString});
         try self.addOutput(printBuff[0..], 0);
         // list item
-        // if (self.isBrackets and char == 44) {
-        //     printBuff = try std.fmt.allocPrint(self.allocator, "<list-item-end>", .{});
-        //     try self.addOutput(printBuff[0..], 0);
-        // }
+        if (self.isBrackets and char == 44) {
+            printBuff = try std.fmt.allocPrint(self.allocator, "<list-item-end>", .{});
+            try self.addOutput(printBuff[0..], 0);
+        }
         // value close
         if (self.isValue and (
             (!self.isSql and self.valueTerminatorChar == char)
@@ -446,6 +194,44 @@ pub const Parser = struct {
             if (char == 32 or char == 10) {
                 self.removeOutputLastChars(1);
             }
+            
+            // maybe pop stack
+            if (!isInList(self.lastKey, &objects) and self.stack.items.len > self.depth) {
+                const last_closed_key = self.stack.pop();
+                var parent_key: []const u8 = "";
+                var is_captured = false;
+                if (self.stack.items.len > 0) {
+                    parent_key = self.stack.getLast();
+                }
+                if (eq(last_closed_key, "include")) {
+                    try self.includes.append(trimString(self.chars));
+                    is_captured = true;
+                }
+                
+                if (!is_captured and eq(parent_key, "view")){
+                    self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentViewChars, last_closed_key, trimString(self.chars)});
+                    is_captured = true;
+                }
+
+                if (!is_captured and isInList(parent_key, &fields)){
+                    self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentFieldChars, last_closed_key, trimString(self.chars)});
+                    is_captured = true;
+                }
+            } else if (self.isValue) {
+                var parent_key: []const u8 = "";
+                var is_captured = false;
+                if (self.stack.items.len > 0) {
+                    parent_key = self.stack.getLast();
+                }
+                if (eq(parent_key, "view")) {
+                    self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"name\":\"{s}\",", .{self.currentViewChars, trimString(self.chars)});
+                    is_captured = true;
+                }
+                if (!is_captured and isInList(parent_key, &fields)) {
+                    self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"name\":\"{s}\",", .{self.currentFieldChars, trimString(self.chars)});
+                }
+            }
+
             // brackets close
             if (self.isBrackets) {
                 self.isBrackets = false;
@@ -486,8 +272,8 @@ pub const Parser = struct {
                 self.removeOutputLastChars(1);
                 if (self.isValue) {
                     self.isValue = false;
-                    printBuff = try std.fmt.allocPrint(self.allocator, "<nested-value>", .{});
-                    try self.addOutput(printBuff[0..], 0);
+                    // printBuff = try std.fmt.allocPrint(self.allocator, "<nested-value>", .{});
+                    // try self.addOutput(printBuff[0..], 0);
                 }
                 self.depth += 1;
                 if (self.chars.len > 1 and self.chars[self.chars.len - 2] == 36) {
@@ -504,6 +290,86 @@ pub const Parser = struct {
                 if (self.isVariable) {
                     self.isVariable = false;
                 }
+                const last_closed_key = self.stack.pop();
+                var is_captured = false;
+                if (eq(last_closed_key, "view")) {
+                    printBuff = try std.fmt.allocPrint(self.allocator, "\n\n#######\n", .{});
+                    try self.addOutput(printBuff[0..], 0);
+                    var dimensions = std.ArrayList([]const u8).init(self.allocator);
+                    var dimension_groups = std.ArrayList([]const u8).init(self.allocator);
+                    var measures = std.ArrayList([]const u8).init(self.allocator);
+                    var filters = std.ArrayList([]const u8).init(self.allocator);
+                    var parameters = std.ArrayList([]const u8).init(self.allocator);
+                    for (self.fields.items) |item| {
+                        var field_type_split = std.mem.splitSequence(u8, item, "<###>");
+                        if (field_type_split.next()) |field_type| {
+                            if (field_type_split.next()) |field_chars| {
+                                if (eq(field_type, "dimension")) {
+                                    try dimensions.append(field_chars);
+                                }
+                                if (eq(field_type, "dimension_group")) {
+                                    try dimension_groups.append(field_chars);
+                                }
+                                if (eq(field_type, "measure")) {
+                                    try measures.append(field_chars);
+                                }
+                                if (eq(field_type, "filter")) {
+                                    try filters.append(field_chars);
+                                }
+                                if (eq(field_type, "parameter")) {
+                                    try parameters.append(field_chars);
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (dimensions.items.len > 0) {
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"dimensions\": [", .{self.currentViewChars});
+                        for (dimensions.items) |item| {
+                            self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
+                        }
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars});
+                    }
+                    if (dimension_groups.items.len > 0) {
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"dimension_groups\": [", .{self.currentViewChars});
+                        for (dimension_groups.items) |item| {
+                            self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
+                        }
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars});
+                    }
+                    if (measures.items.len > 0) {
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"measures\": [", .{self.currentViewChars});
+                        for (measures.items) |item| {
+                            self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
+                        }
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars});
+                    }
+                    if (filters.items.len > 0) {
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"filters\": [", .{self.currentViewChars});
+                        for (filters.items) |item| {
+                            self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
+                        }
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars});
+                    }
+                    if (parameters.items.len > 0) {
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"parameters\": [", .{self.currentViewChars});
+                        for (parameters.items) |item| {
+                            self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
+                        }
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars});
+                    }
+                    // self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s},{{{s}}}", .{self.currentViewChars, item});
+                    try self.views.append(self.currentViewChars);
+                    self.currentViewChars = &[_]u8{};
+                    self.fields.clearAndFree();
+                    is_captured = true;
+                }
+                if (!is_captured and isInList(last_closed_key, &fields)) {
+                    self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}<###>{s}", .{last_closed_key, self.currentFieldChars, });
+                    try self.fields.append(self.currentFieldChars);
+                    self.currentFieldChars = &[_]u8{};
+                    is_captured = true;
+                }
                 self.chars = &[_]u8{};
                 return;
             }
@@ -512,10 +378,20 @@ pub const Parser = struct {
             if (!self.isValue and char == 58 and (self.chars[0] == 32 or self.chars[0] == 10 or self.chars.len == self.totalChars)) {
                 var key = trimString(self.chars[0..]);
                 key = key[0..key.len-1];
-                try self.updateKey(key);
-                // self.key = try std.fmt.allocPrint(self.allocator, "{any}.{s}", .{self.depth,key});
+                try self.stack.append(key);
+                // try self.updateKey(key);
+
+                // if (eq(key, "view")) {
+                //     // if (self.views.len == 0) {
+                //     //     self.views = "views: [";
+                //     // }
+                // }
                 
-                printBuff = try std.fmt.allocPrint(self.allocator, "\n<{s}>", .{self.key});
+                printBuff = try std.fmt.allocPrint(self.allocator, "\n", .{});
+                for (self.stack.items) |item| {
+                    printBuff = try std.fmt.allocPrint(self.allocator, "{s}{s}/", .{printBuff, item});
+                }
+
                 try self.addOutput(printBuff[0..], key.len+1);
                 // printBuff = try std.fmt.allocPrint(self.allocator, keyValueDelimiter, .{});
                 // try self.addOutput(printBuff, 1);
@@ -570,7 +446,7 @@ pub const Parser = struct {
     }
 };
 
-pub fn equalStrings(a: []const u8, b: []const u8) bool {
+pub fn eq(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
 }
 
@@ -600,12 +476,22 @@ pub fn main() !void {
     while (chars.next()) |char| {
         try parser.parse(char[0]);
     }
-    const parsed: []u8 = parser.output;
 
-    print("{s}", .{parsed});
+    print("{{", .{});
 
-    // _ = try getKeyValues(allocator, parsed, 0, &lkml);
-    
-    // lkml.stringify();
-
+    if (parser.includes.items.len > 0) {
+        print("\"includes\": [", .{});
+        for (parser.includes.items) |item| {
+            print("{s},", .{item});
+        }
+        print("],", .{});
+    }
+    if (parser.views.items.len > 0) {
+        print("\"views\": [", .{});
+        for (parser.views.items) |item| {
+            print("{{{s}}},", .{item});
+        }
+        print("],", .{});
+    } 
+    print("}}", .{});
 }
