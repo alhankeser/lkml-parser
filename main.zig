@@ -78,6 +78,7 @@ pub const Parser = struct {
     chars: []u8,
     totalChars: u32,
     depth: i8,
+    isComment: bool,
     isQuoted: bool,
     isNonQuoted: bool,
     isBrackets: bool,
@@ -101,6 +102,7 @@ pub const Parser = struct {
             .chars = &[_]u8{},
             .totalChars = 0,
             .depth = 0,
+            .isComment = false,
             .isQuoted = false,
             .isNonQuoted = false,
             .isBrackets = false,
@@ -129,7 +131,30 @@ pub const Parser = struct {
         self.totalChars += 1;
     }
 
-    pub fn addOutput(self: *Parser, chars: []u8, offset: usize) !void {
+    pub fn getOutput(self: *Parser) ![]const u8 {
+        try self.addOutput("{", 0);
+        if (self.includes.items.len > 0) {
+            try self.addOutput("\"includes\": [", 0);
+            for (self.includes.items) |item| {
+                try self.addOutput(try std.fmt.allocPrint(self.allocator, "{s},", .{item}), 0);
+            }
+            self.output = self.output[0..self.output.len-1];
+            try self.addOutput("],", 0);
+        }
+        if (self.views.items.len > 0) {
+            try self.addOutput("\"views\": [", 0);
+            for (self.views.items) |item| {
+                try self.addOutput(try std.fmt.allocPrint(self.allocator, "{{{s}}},", .{item}), 0);
+            }
+            self.output = self.output[0..self.output.len-1];
+            try self.addOutput("],", 0);
+        }
+        self.output = self.output[0..self.output.len-1];
+        try self.addOutput("}", 0);
+        return self.output;
+    }
+
+    pub fn addOutput(self: *Parser, chars: []const u8, offset: usize) !void {
         const totalSize = self.output.len + chars.len;
         const buffer = try self.allocator.alloc(u8, totalSize);
         var safeOffset = offset;
@@ -171,15 +196,38 @@ pub const Parser = struct {
     }
 
     pub fn parse(self: *Parser, char: u8) !void {
-        try self.addChar(char);
-        const charString: [1]u8 = [1]u8{char};
-        var printBuff = try std.fmt.allocPrint(self.allocator, "{s}", .{charString});
-        try self.addOutput(printBuff[0..], 0);
-        // list item
-        if (self.isBrackets and char == 44) {
-            printBuff = try std.fmt.allocPrint(self.allocator, "<list-item-end>", .{});
-            try self.addOutput(printBuff[0..], 0);
+        
+        if (self.isComment and char == 10) {
+            self.isComment = false;
         }
+        if (self.isComment) {
+            return;
+        }
+        // escape backslahes
+        if (char == 92) {
+            try self.addChar(92);
+        }
+        // backslash any quotes in content
+        if (char == 34) {
+            try self.addChar(92);
+        }
+        // // escape return
+        if (self.isValue and char == 10) {
+            try self.addChar(92);
+            try self.addChar(110);
+        } else {
+            try self.addChar(char);
+        }
+        
+        if (char == 35) {
+            self.isComment = true;
+            self.chars = self.chars[0..self.chars.len-1];
+        }
+        // list item
+        // if (self.isBrackets and char == 44) {
+        //     //printBuff = try std.fmt.allocPrint(self.allocator, "<list-item-end>", .{});
+        //     //try self.addOutput(printBuff[0..], 0);
+        // }
         // value close
         if (self.isValue and (
             (!self.isSql and self.valueTerminatorChar == char)
@@ -191,9 +239,9 @@ pub const Parser = struct {
                 and self.isNonQuoted
                 and (self.valueTerminatorChar == char or char == 10)))) {
             
-            if (char == 32 or char == 10) {
-                self.removeOutputLastChars(1);
-            }
+            // if (char == 32 or char == 10) {
+            //     // self.removeOutputLastChars(1);
+            // }
             
             // maybe pop stack
             if (!isInList(self.lastKey, &objects) and self.stack.items.len > self.depth) {
@@ -204,7 +252,7 @@ pub const Parser = struct {
                     parent_key = self.stack.getLast();
                 }
                 if (eq(last_closed_key, "include")) {
-                    try self.includes.append(trimString(self.chars));
+                    try self.includes.append(try std.fmt.allocPrint(self.allocator, "\"{s}\"",.{trimString(self.chars)}));
                     is_captured = true;
                 }
                 
@@ -212,7 +260,6 @@ pub const Parser = struct {
                     self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentViewChars, last_closed_key, trimString(self.chars)});
                     is_captured = true;
                 }
-
                 if (!is_captured and isInList(parent_key, &fields)){
                     self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentFieldChars, last_closed_key, trimString(self.chars)});
                     is_captured = true;
@@ -235,26 +282,26 @@ pub const Parser = struct {
             // brackets close
             if (self.isBrackets) {
                 self.isBrackets = false;
-                printBuff = try std.fmt.allocPrint(self.allocator, "#!list", .{});
-                try self.addOutput(printBuff[0..], 0);
+                //printBuff = try std.fmt.allocPrint(self.allocator, "#!list", .{});
+                //try self.addOutput(printBuff[0..], 0);
             }
             // sql close
             if (self.isSql) {
                 self.isSql = false;
-                printBuff = try std.fmt.allocPrint(self.allocator, "#!sql", .{});
-                try self.addOutput(printBuff[0..], 0);
+                //printBuff = try std.fmt.allocPrint(self.allocator, "#!sql", .{});
+                //try self.addOutput(printBuff[0..], 0);
             }
             // quotes close
             if (self.isQuoted) {
                 self.isQuoted = false;
-                printBuff = try std.fmt.allocPrint(self.allocator, "#!quotes", .{});
-                try self.addOutput(printBuff[0..], 0);
+                //printBuff = try std.fmt.allocPrint(self.allocator, "#!quotes", .{});
+                //try self.addOutput(printBuff[0..], 0);
             }
             // non quoted close
             if (self.isNonQuoted) {
                 self.isNonQuoted = false;
-                printBuff = try std.fmt.allocPrint(self.allocator, "#!nonquoted", .{});
-                try self.addOutput(printBuff[0..], 0);
+                //printBuff = try std.fmt.allocPrint(self.allocator, "#!nonquoted", .{});
+                //try self.addOutput(printBuff[0..], 0);
             }
             
             // reset the rest
@@ -262,18 +309,18 @@ pub const Parser = struct {
             self.isValue = false;
             self.valueTerminatorChar = 0;
             self.chars = &[_]u8{};
-            printBuff = try std.fmt.allocPrint(self.allocator, "</{s}>", .{self.key});
-            try self.addOutput(printBuff[0..], 0);
+            //printBuff = try std.fmt.allocPrint(self.allocator, "</{s}>", .{self.key});
+            //try self.addOutput(printBuff[0..], 0);
             return;
         }
         if (!self.isQuoted and !self.isBrackets and !self.isNonQuoted and !self.isSql) {
             // curly braces open
             if (char == 123) {
-                self.removeOutputLastChars(1);
+                // self.removeOutputLastChars(1);
                 if (self.isValue) {
                     self.isValue = false;
-                    // printBuff = try std.fmt.allocPrint(self.allocator, "<nested-value>", .{});
-                    // try self.addOutput(printBuff[0..], 0);
+                    //// printBuff = try std.fmt.allocPrint(self.allocator, "<nested-value>", .{});
+                    //// try self.addOutput(printBuff[0..], 0);
                 }
                 self.depth += 1;
                 if (self.chars.len > 1 and self.chars[self.chars.len - 2] == 36) {
@@ -285,7 +332,7 @@ pub const Parser = struct {
 
             // curly braces close
             if (char == 125) {
-                self.removeOutputLastChars(1);
+                // self.removeOutputLastChars(1);
                 self.depth -= 1;
                 if (self.isVariable) {
                     self.isVariable = false;
@@ -293,8 +340,8 @@ pub const Parser = struct {
                 const last_closed_key = self.stack.pop();
                 var is_captured = false;
                 if (eq(last_closed_key, "view")) {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "\n\n#######\n", .{});
-                    try self.addOutput(printBuff[0..], 0);
+                    //printBuff = try std.fmt.allocPrint(self.allocator, "\n\n#######\n", .{});
+                    //try self.addOutput(printBuff[0..], 0);
                     var dimensions = std.ArrayList([]const u8).init(self.allocator);
                     var dimension_groups = std.ArrayList([]const u8).init(self.allocator);
                     var measures = std.ArrayList([]const u8).init(self.allocator);
@@ -328,45 +375,45 @@ pub const Parser = struct {
                         for (dimensions.items) |item| {
                             self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
                         }
-                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars});
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars[0..self.currentViewChars.len-1]});
                     }
                     if (dimension_groups.items.len > 0) {
                         self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"dimension_groups\": [", .{self.currentViewChars});
                         for (dimension_groups.items) |item| {
                             self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
                         }
-                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars});
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars[0..self.currentViewChars.len-1]});
                     }
                     if (measures.items.len > 0) {
                         self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"measures\": [", .{self.currentViewChars});
                         for (measures.items) |item| {
                             self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
                         }
-                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars});
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars[0..self.currentViewChars.len-1]});
                     }
                     if (filters.items.len > 0) {
                         self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"filters\": [", .{self.currentViewChars});
                         for (filters.items) |item| {
                             self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
                         }
-                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars});
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars[0..self.currentViewChars.len-1]});
                     }
                     if (parameters.items.len > 0) {
                         self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"parameters\": [", .{self.currentViewChars});
                         for (parameters.items) |item| {
                             self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
                         }
-                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars});
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars[0..self.currentViewChars.len-1]});
                     }
                     // self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s},{{{s}}}", .{self.currentViewChars, item});
-                    try self.views.append(self.currentViewChars);
+                    try self.views.append(self.currentViewChars[0..self.currentViewChars.len-1]);
                     self.currentViewChars = &[_]u8{};
                     self.fields.clearAndFree();
                     is_captured = true;
                 }
                 if (!is_captured and isInList(last_closed_key, &fields)) {
                     self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}<###>{s}", .{last_closed_key, self.currentFieldChars, });
-                    try self.fields.append(self.currentFieldChars);
+                    try self.fields.append(self.currentFieldChars[0..self.currentFieldChars.len-1]);
                     self.currentFieldChars = &[_]u8{};
                     is_captured = true;
                 }
@@ -387,17 +434,17 @@ pub const Parser = struct {
                 //     // }
                 // }
                 
-                printBuff = try std.fmt.allocPrint(self.allocator, "\n", .{});
-                for (self.stack.items) |item| {
-                    printBuff = try std.fmt.allocPrint(self.allocator, "{s}{s}/", .{printBuff, item});
-                }
+                //printBuff = try std.fmt.allocPrint(self.allocator, "\n", .{});
+                // for (self.stack.items) |item| {
+                //     //printBuff = try std.fmt.allocPrint(self.allocator, "{s}{s}/", .{printBuff, item});
+                // }
 
-                try self.addOutput(printBuff[0..], key.len+1);
-                // printBuff = try std.fmt.allocPrint(self.allocator, keyValueDelimiter, .{});
-                // try self.addOutput(printBuff, 1);
+                //try self.addOutput(printBuff[0..], key.len+1);
+                //// printBuff = try std.fmt.allocPrint(self.allocator, keyValueDelimiter, .{});
+                //// try self.addOutput(printBuff, 1);
                 self.lastKey = key;
-                const keyLen: u16 = @intCast(key.len);
-                self.removeOutputLastChars(keyLen + 1);
+                // const keyLen: u16 = @intCast(key.len);
+                // self.removeOutputLastChars(keyLen + 1);
                 self.isValue = true;
                 self.chars = &[_]u8{};
                 return;
@@ -408,8 +455,8 @@ pub const Parser = struct {
                 self.isBrackets = true;
                 self.valueTerminatorChar = 93;
                 self.chars = &[_]u8{};
-                // printBuff = try std.fmt.allocPrint(self.allocator, "<list-start>", .{});
-                // try self.addOutput(printBuff[0..], 0);
+                //// printBuff = try std.fmt.allocPrint(self.allocator, "<list-start>", .{});
+                //// try self.addOutput(printBuff[0..], 0);
                 return;
             }
 
@@ -417,8 +464,8 @@ pub const Parser = struct {
             if (char == 34 or char == 39) {
                 self.valueTerminatorChar = char;
                 self.isQuoted = true;
-                // printBuff = try std.fmt.allocPrint(self.allocator, "<quotes-start>", .{});
-                // try self.addOutput(printBuff[0..], 0);
+                //// printBuff = try std.fmt.allocPrint(self.allocator, "<quotes-start>", .{});
+                //// try self.addOutput(printBuff[0..], 0);
                 return;
             }
 
@@ -427,21 +474,21 @@ pub const Parser = struct {
                 self.isSql = keyContainsSql(self.lastKey);
                 if (self.isSql) {
                     self.valueTerminatorChar = 59;
-                    // printBuff = try std.fmt.allocPrint(self.allocator, "<sql-start>", .{});
-                    // try self.addOutput(printBuff[0..], 0);
+                    //// printBuff = try std.fmt.allocPrint(self.allocator, "<sql-start>", .{});
+                    //// try self.addOutput(printBuff[0..], 0);
                 } else {
                     self.isNonQuoted = true;
                     self.valueTerminatorChar = 32;
-                    // printBuff = try std.fmt.allocPrint(self.allocator, "<nonquoted-start>", .{});
-                    // try self.addOutput(printBuff[0..], 0);
+                    //// printBuff = try std.fmt.allocPrint(self.allocator, "<nonquoted-start>", .{});
+                    //// try self.addOutput(printBuff[0..], 0);
                 }
                 return;
             }
 
             // unnecessary space or newline
-            if (char == 32 or char == 10) {
-                self.removeOutputLastChars(1);
-            }
+            // if (char == 32 or char == 10) {
+            //     // self.removeOutputLastChars(1);
+            // }
         }
     }
 };
@@ -470,28 +517,14 @@ pub fn main() !void {
     const readBuf = try file.readToEndAlloc(allocator, fileSize);
     defer allocator.free(readBuf);
 
-    // var lkml = try Lkml.init(allocator, filePath);
+    // Parse
     var parser = try Parser.init(allocator);
     var chars = std.mem.window(u8, readBuf, 1, 1);
     while (chars.next()) |char| {
         try parser.parse(char[0]);
     }
 
-    print("{{", .{});
-
-    if (parser.includes.items.len > 0) {
-        print("\"includes\": [", .{});
-        for (parser.includes.items) |item| {
-            print("{s},", .{item});
-        }
-        print("],", .{});
-    }
-    if (parser.views.items.len > 0) {
-        print("\"views\": [", .{});
-        for (parser.views.items) |item| {
-            print("{{{s}}},", .{item});
-        }
-        print("],", .{});
-    } 
-    print("}}", .{});
+    // Print out
+    const output = try parser.getOutput();
+    _ = try stdout.write(output);
 }
