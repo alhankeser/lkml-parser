@@ -4,7 +4,7 @@ const stdout = std.io.getStdOut().writer();
 const print = std.debug.print;
 
 var objects = [_][]const u8{"view", "derived_table", "action", "derived_table", "filter", "parameter", "dimension", "dimension_group", "measure", "set"};
-var fields = [_][]const u8{"filter", "parameter", "dimension", "dimension_group", "measure", "set"};
+var fields = [_][]const u8{"derived_table", "filter", "parameter", "dimension", "dimension_group", "measure", "set"};
 
 pub fn isInList(needle: []const u8, haystack: [][]const u8) bool {
     for (haystack) |thing| {
@@ -140,20 +140,8 @@ pub const Parser = struct {
         }
     }
 
-    pub fn updateKey(self: *Parser, itemKey: []const u8) !void {
-        var newKey: []u8 = &[_]u8{};
-        var depthCounter: u32 = 0;
-        var keySplit = std.mem.splitAny(u8, self.key, ".");
-        _ = keySplit.next();
-        while (depthCounter < self.depth) {
-            if (keySplit.next()) |keyPart| {
-                newKey = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{newKey, keyPart});
-            }
-            depthCounter += 1;
-        }
-        newKey = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{newKey, itemKey});
-        self.allocator.free(self.key);
-        self.key = newKey[0..];
+    pub fn printDeezChars(self: *Parser) !void {
+        print("{s}\n", .{self.chars});
     }
 
     pub fn parse(self: *Parser, char: u8) !void {
@@ -176,7 +164,7 @@ pub const Parser = struct {
             try self.addChar(92);
         }
         // // escape return
-        if (self.isValue and char == 10) {
+        if (self.isValue and !self.isNonQuoted and char == 10) {
             try self.addChar(92);
             try self.addChar(110);
         } else {
@@ -198,19 +186,31 @@ pub const Parser = struct {
                 and self.isNonQuoted
                 and (self.valueTerminatorChar == char or char == 10)))) {
             
+            // remove terminal char from sql
+            if (self.isSql) {
+                self.chars = self.chars[0..self.chars.len-2];
+                while(self.chars[self.chars.len-1] == 32) {
+                    self.chars = self.chars[0..self.chars.len-1];
+                }
+                if (self.chars[self.chars.len-1] == 110 and self.chars[self.chars.len - 2] == 92) {
+                    self.chars = self.chars[0..self.chars.len-2];
+                }
+            }
+
             // maybe pop stack
             if (!isInList(self.lastKey, &objects) and self.stack.items.len > self.depth) {
                 const last_closed_key = self.stack.pop();
+                
                 var parent_key: []const u8 = "";
                 var is_captured = false;
                 if (self.stack.items.len > 0) {
                     parent_key = self.stack.getLast();
                 }
+                
                 if (eq(last_closed_key, "include")) {
                     try self.includes.append(try std.fmt.allocPrint(self.allocator, "\"{s}\"",.{trimString(self.chars)}));
                     is_captured = true;
                 }
-                
                 if (!is_captured and eq(parent_key, "view")){
                     self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentViewChars, last_closed_key, trimString(self.chars)});
                     is_captured = true;
@@ -261,14 +261,12 @@ pub const Parser = struct {
         if (!self.isQuoted and !self.isBrackets and !self.isNonQuoted and !self.isSql) {
             // curly braces open
             if (char == 123) {
-                if (self.isValue) {
-                    self.isValue = false;
-                }
                 self.depth += 1;
                 if (self.chars.len > 1 and self.chars[self.chars.len - 2] == 36) {
                     self.isVariable = true;
                 }
                 self.chars = &[_]u8{};
+                self.isValue = false;
                 return;
             }
 
@@ -286,6 +284,7 @@ pub const Parser = struct {
                     var measures = std.ArrayList([]const u8).init(self.allocator);
                     var filters = std.ArrayList([]const u8).init(self.allocator);
                     var parameters = std.ArrayList([]const u8).init(self.allocator);
+                    var derived_table: []u8 = &[_]u8{};
                     for (self.fields.items) |item| {
                         var field_type_split = std.mem.splitSequence(u8, item, "<###>");
                         if (field_type_split.next()) |field_type| {
@@ -304,6 +303,9 @@ pub const Parser = struct {
                                 }
                                 if (eq(field_type, "parameter")) {
                                     try parameters.append(field_chars);
+                                }
+                                if (eq(field_type, "derived_table")) {
+                                    derived_table = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{derived_table, field_chars});
                                 }
                             }
                         }
@@ -343,6 +345,10 @@ pub const Parser = struct {
                             self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
                         }
                         self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars[0..self.currentViewChars.len-1]});
+                    }
+                    if (derived_table.len > 0) {
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"derived_table\": ", .{self.currentViewChars});
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, derived_table});
                     }
                     if (self.currentViewChars.len > 0) {
                         self.currentViewChars = self.currentViewChars[0..self.currentViewChars.len-1];
