@@ -90,5 +90,5 @@ def test_matches_lkml_output(view_file):
     print(filepath)
     test = parse_zlkml(filepath)
     control = parse_lkml(filepath)
-    save_files(test, control)
+    save_files(test, control, view_file)
     assert control == test
