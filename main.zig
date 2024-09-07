@@ -55,6 +55,7 @@ pub const Parser = struct {
     includes: std.ArrayList([]const u8),
     views: std.ArrayList([]const u8),
     fields: std.ArrayList([]const u8),
+    param_list: std.ArrayList([]const u8),
 
     pub fn init(allocator: Allocator) !Parser {
         return .{
@@ -79,6 +80,7 @@ pub const Parser = struct {
             .includes = std.ArrayList([]const u8).init(allocator),
             .views = std.ArrayList([]const u8).init(allocator),
             .fields = std.ArrayList([]const u8).init(allocator),
+            .param_list = std.ArrayList([]const u8).init(allocator),
         };
     }
 
@@ -149,6 +151,12 @@ pub const Parser = struct {
         if (self.chars.len > 0) {
             previous_char = self.chars[self.chars.len-1];
         }
+        // list item end
+        if (self.isBrackets and char == 44) {
+            try self.param_list.append(trimString(self.chars));
+            self.chars = &[_]u8{};
+            return;
+        }
         if (self.isComment and char == 10) {
             self.isComment = false;
         }
@@ -164,7 +172,7 @@ pub const Parser = struct {
             try self.addChar(92);
         }
         // // escape return
-        if (self.isValue and !self.isNonQuoted and char == 10) {
+        if (self.isValue and !self.isNonQuoted and !self.isBrackets and char == 10) {
             try self.addChar(92);
             try self.addChar(110);
         } else {
@@ -216,7 +224,16 @@ pub const Parser = struct {
                     is_captured = true;
                 }
                 if (!is_captured and isInList(parent_key, &fields)){
-                    self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentFieldChars, last_closed_key, trimString(self.chars)});
+                    if (self.param_list.items.len > 0) {
+                        self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":[", .{self.currentFieldChars, last_closed_key});
+                        for (self.param_list.items) |item| {
+                            self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\",", .{self.currentFieldChars, item});
+                        }
+                        self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentFieldChars[0..self.currentFieldChars.len-1]});
+                        self.param_list.clearAndFree();
+                    } else {
+                        self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentFieldChars, last_closed_key, trimString(self.chars)});
+                    }
                     is_captured = true;
                 }
             } else if (self.isValue) {
