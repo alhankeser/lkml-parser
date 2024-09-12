@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const stdout = std.io.getStdOut().writer();
 const print = std.debug.print;
 
-var objects = [_][]const u8{"view", "derived_table", "action", "derived_table", "filter", "parameter", "dimension", "dimension_group", "measure", "set"};
+var objects = [_][]const u8{"view", "derived_table", "action", "filters", "parameter", "dimension", "dimension_group", "measure", "set"};
 var fields = [_][]const u8{"derived_table", "filter", "parameter", "dimension", "dimension_group", "measure", "set"};
 
 pub fn isInList(needle: []const u8, haystack: [][]const u8) bool {
@@ -97,7 +97,7 @@ pub const Parser = struct {
     pub fn getOutput(self: *Parser) ![]const u8 {
         try self.addOutput("{", 0);
         if (self.includes.items.len > 0) {
-            try self.addOutput("\"includes\": [", 0);
+            try self.addOutput("\"includes\":[", 0);
             for (self.includes.items) |item| {
                 try self.addOutput(try std.fmt.allocPrint(self.allocator, "{s},", .{item}), 0);
             }
@@ -105,7 +105,7 @@ pub const Parser = struct {
             try self.addOutput("],", 0);
         }
         if (self.views.items.len > 0) {
-            try self.addOutput("\"views\": [", 0);
+            try self.addOutput("\"views\":[", 0);
             for (self.views.items) |item| {
                 try self.addOutput(try std.fmt.allocPrint(self.allocator, "{{{s}}},", .{item}), 0);
             }
@@ -150,7 +150,11 @@ pub const Parser = struct {
         var previous_char = char;
         if (self.chars.len > 0) {
             previous_char = self.chars[self.chars.len-1];
+            if (previous_char == 32 and char == 32 and !self.isValue) {
+                return;
+            }
         }
+        
         // list item end
         if (self.isBrackets and char == 44) {
             try self.param_list.append(trimString(self.chars));
@@ -204,9 +208,10 @@ pub const Parser = struct {
                     self.chars = self.chars[0..self.chars.len-2];
                 }
             }
-
+            
             // maybe pop stack
             if (!isInList(self.lastKey, &objects) and self.stack.items.len > self.depth) {
+                
                 const last_closed_key = self.stack.pop();
                 
                 var parent_key: []const u8 = "";
@@ -220,17 +225,25 @@ pub const Parser = struct {
                     is_captured = true;
                 }
                 if (!is_captured and eq(parent_key, "view")){
-                    self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentViewChars, last_closed_key, trimString(self.chars)});
+                    if (self.isBrackets) {
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":[\"{s}\"],", .{self.currentViewChars, last_closed_key, trimString(self.chars[0..self.chars.len-1])});
+                    } else {
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentViewChars, last_closed_key, trimString(self.chars)});
+                    }
                     is_captured = true;
                 }
                 if (!is_captured and isInList(parent_key, &fields)){
+                    
                     if (self.param_list.items.len > 0) {
                         self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":[", .{self.currentFieldChars, last_closed_key});
                         for (self.param_list.items) |item| {
                             self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\",", .{self.currentFieldChars, item});
                         }
-                        self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentFieldChars[0..self.currentFieldChars.len-1]});
+                        self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s},\"{s}\"],", .{self.currentFieldChars[0..self.currentFieldChars.len-1], trimString(self.chars[0..self.chars.len-1])});
                         self.param_list.clearAndFree();
+                    }
+                    else if (self.isBrackets) {
+                        self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":[\"{s}\"],", .{self.currentFieldChars, last_closed_key, trimString(self.chars[0..self.chars.len-1])});
                     } else {
                         self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentFieldChars, last_closed_key, trimString(self.chars)});
                     }
@@ -250,6 +263,7 @@ pub const Parser = struct {
                     self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"name\":\"{s}\",", .{self.currentFieldChars, trimString(self.chars)});
                 }
             }
+            
 
             // brackets close
             if (self.isBrackets) {
@@ -282,6 +296,9 @@ pub const Parser = struct {
                 if (self.chars.len > 1 and self.chars[self.chars.len - 2] == 36) {
                     self.isVariable = true;
                 }
+                // if (isInList(self.lastKey, &objects)) {
+                //     self.valueTerminatorChar = 125;
+                // }
                 self.chars = &[_]u8{};
                 self.isValue = false;
                 return;
@@ -301,6 +318,7 @@ pub const Parser = struct {
                     var measures = std.ArrayList([]const u8).init(self.allocator);
                     var filters = std.ArrayList([]const u8).init(self.allocator);
                     var parameters = std.ArrayList([]const u8).init(self.allocator);
+                    var sets = std.ArrayList([]const u8).init(self.allocator);
                     var derived_table: []u8 = &[_]u8{};
                     for (self.fields.items) |item| {
                         var field_type_split = std.mem.splitSequence(u8, item, "<###>");
@@ -321,6 +339,9 @@ pub const Parser = struct {
                                 if (eq(field_type, "parameter")) {
                                     try parameters.append(field_chars);
                                 }
+                                if (eq(field_type, "set")) {
+                                    try sets.append(field_chars);
+                                }
                                 if (eq(field_type, "derived_table")) {
                                     derived_table = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{derived_table, field_chars});
                                 }
@@ -329,42 +350,49 @@ pub const Parser = struct {
                     }
                     
                     if (dimensions.items.len > 0) {
-                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"dimensions\": [", .{self.currentViewChars});
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"dimensions\":[", .{self.currentViewChars});
                         for (dimensions.items) |item| {
                             self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
                         }
                         self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars[0..self.currentViewChars.len-1]});
                     }
                     if (dimension_groups.items.len > 0) {
-                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"dimension_groups\": [", .{self.currentViewChars});
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"dimension_groups\":[", .{self.currentViewChars});
                         for (dimension_groups.items) |item| {
                             self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
                         }
                         self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars[0..self.currentViewChars.len-1]});
                     }
                     if (measures.items.len > 0) {
-                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"measures\": [", .{self.currentViewChars});
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"measures\":[", .{self.currentViewChars});
                         for (measures.items) |item| {
                             self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
                         }
                         self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars[0..self.currentViewChars.len-1]});
                     }
                     if (filters.items.len > 0) {
-                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"filters\": [", .{self.currentViewChars});
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"filters\":[", .{self.currentViewChars});
                         for (filters.items) |item| {
                             self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
                         }
                         self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars[0..self.currentViewChars.len-1]});
                     }
                     if (parameters.items.len > 0) {
-                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"parameters\": [", .{self.currentViewChars});
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"parameters\":[", .{self.currentViewChars});
                         for (parameters.items) |item| {
                             self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
                         }
                         self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars[0..self.currentViewChars.len-1]});
                     }
+                    if (sets.items.len > 0) {
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"sets\":[", .{self.currentViewChars});
+                        for (sets.items) |item| {
+                            self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, item});
+                        }
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}],", .{self.currentViewChars[0..self.currentViewChars.len-1]});
+                    }                    
                     if (derived_table.len > 0) {
-                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"derived_table\": ", .{self.currentViewChars});
+                        self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}\"derived_table\":", .{self.currentViewChars});
                         self.currentViewChars = try std.fmt.allocPrint(self.allocator, "{s}{{{s}}},", .{self.currentViewChars, derived_table});
                     }
                     if (self.currentViewChars.len > 0) {
