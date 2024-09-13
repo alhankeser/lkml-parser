@@ -46,6 +46,7 @@ pub const Parser = struct {
     isVariable: bool,
     isValue: bool,
     isSql: bool,
+    field_object_open: bool,
     lastKey: []const u8,
     valueTerminatorChar: u8,
     output: []u8,
@@ -81,6 +82,7 @@ pub const Parser = struct {
             .views = std.ArrayList([]const u8).init(allocator),
             .fields = std.ArrayList([]const u8).init(allocator),
             .param_list = std.ArrayList([]const u8).init(allocator),
+            .field_object_open = false,
         };
     }
 
@@ -146,6 +148,17 @@ pub const Parser = struct {
         print("{s}\n", .{self.chars});
     }
 
+    pub fn resetState(self: *Parser) !void {
+        self.isBrackets = false;
+        self.isSql = false;
+        self.isQuoted = false;
+        self.isNonQuoted = false;
+        self.lastKey = &[_]u8{};
+        self.isValue = false;
+        self.valueTerminatorChar = 0;
+        self.chars = &[_]u8{};
+    }
+
     pub fn parse(self: *Parser, char: u8) !void {
         var previous_char = char;
         if (self.chars.len > 0) {
@@ -187,6 +200,22 @@ pub const Parser = struct {
             self.isComment = true;
             self.chars = self.chars[0..self.chars.len-1];
         }
+
+        if (self.depth == 3 and self.chars.len > 1) {        
+            if (self.isValue and (self.valueTerminatorChar == char
+                    or (self.chars.len > 1
+                        and self.isNonQuoted
+                        and (self.valueTerminatorChar == char or char == 10)))
+                ) { 
+                if (!self.field_object_open) {
+                    const parent_key = self.stack.items[2];
+                    self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":{{", .{self.currentFieldChars, parent_key});
+                    self.field_object_open = true;
+                }
+                self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentFieldChars, self.lastKey, trimString(self.chars)});
+            }
+        }
+
         // value close
         if (self.isValue and previous_char != 92 and (
             (!self.isSql and self.valueTerminatorChar == char)
@@ -264,29 +293,7 @@ pub const Parser = struct {
                 }
             }
             
-
-            // brackets close
-            if (self.isBrackets) {
-                self.isBrackets = false;
-            }
-            // sql close
-            if (self.isSql) {
-                self.isSql = false;
-            }
-            // quotes close
-            if (self.isQuoted) {
-                self.isQuoted = false;
-            }
-            // non quoted close
-            if (self.isNonQuoted) {
-                self.isNonQuoted = false;
-            }
-            
-            // reset the rest
-            self.lastKey = &[_]u8{};
-            self.isValue = false;
-            self.valueTerminatorChar = 0;
-            self.chars = &[_]u8{};
+            try self.resetState();
             return;
         }
         if (!self.isQuoted and !self.isBrackets and !self.isNonQuoted and !self.isSql) {
@@ -306,6 +313,10 @@ pub const Parser = struct {
 
             // curly braces close
             if (char == 125) {
+                if (self.depth == 3) {
+                    self.field_object_open = false;
+                    self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}}},", .{self.currentFieldChars[0..self.currentFieldChars.len-1]});
+                }
                 self.depth -= 1;
                 if (self.isVariable) {
                     self.isVariable = false;
