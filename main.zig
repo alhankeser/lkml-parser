@@ -208,11 +208,18 @@ pub const Parser = struct {
                         and (self.valueTerminatorChar == char or char == 10)))
                 ) { 
                 if (!self.field_object_open) {
-                    const parent_key = self.stack.items[2];
+                    var parent_key = self.stack.items[2];
+                    if(eq(parent_key, "filters")) {
+                        parent_key = "filters__all";
+                    }
                     self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":{{", .{self.currentFieldChars, parent_key});
                     self.field_object_open = true;
                 }
-                self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentFieldChars, self.lastKey, trimString(self.chars)});
+                var value = trimString(self.chars);
+                if (eq(self.lastKey, "value")) {
+                    value = value[2..value.len-2];
+                }
+                self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentFieldChars, self.lastKey, value});
             }
         }
 
