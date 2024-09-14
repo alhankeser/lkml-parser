@@ -46,7 +46,8 @@ pub const Parser = struct {
     isVariable: bool,
     isValue: bool,
     isSql: bool,
-    field_object_open: bool,
+    is_filters_object: bool,
+    is_filters_list: bool,
     lastKey: []const u8,
     valueTerminatorChar: u8,
     output: []u8,
@@ -82,7 +83,8 @@ pub const Parser = struct {
             .views = std.ArrayList([]const u8).init(allocator),
             .fields = std.ArrayList([]const u8).init(allocator),
             .param_list = std.ArrayList([]const u8).init(allocator),
-            .field_object_open = false,
+            .is_filters_object = false,
+            .is_filters_list = false,
         };
     }
 
@@ -161,11 +163,29 @@ pub const Parser = struct {
 
     pub fn parse(self: *Parser, char: u8) !void {
         var previous_char = char;
+        if (self.isSql and char == 10 and trimString(self.chars).len <= 1) {
+            self.chars = &[_]u8{};
+            return;
+        }
         if (self.chars.len > 0) {
             previous_char = self.chars[self.chars.len-1];
             if (previous_char == 32 and char == 32 and !self.isValue) {
                 return;
             }
+        }
+
+        if (char == 44 and self.is_filters_list and !self.isValue) {
+            try self.resetState();
+            try self.addChar(32);
+            return;
+        }
+
+        if (char == 93 and self.is_filters_list) {
+            self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}]],", .{self.currentFieldChars[0..self.currentFieldChars.len-1]});
+            self.is_filters_list = false;
+            _ = self.stack.pop();
+            try self.resetState();
+            return;
         }
         
         // list item end
@@ -201,19 +221,41 @@ pub const Parser = struct {
             self.chars = self.chars[0..self.chars.len-1];
         }
 
-        if (self.depth == 3 and self.chars.len > 1) {        
+        if (!self.is_filters_list and self.isValue and self.depth == 2 and self.isBrackets and eq(self.lastKey, "filters")) {
+            self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"filters__all\":[[", .{self.currentFieldChars});
+            self.is_filters_list = true;
+            self.isBrackets = false;
+            self.isValue = false;
+            try self.resetState();
+            try self.addChar(32);
+            try self.addChar(char);
+            return;
+        }
+        
+
+        if (self.isValue and self.is_filters_list and self.isQuoted and self.depth == 2 and self.valueTerminatorChar == char) {
+            var value = trimString(self.chars);
+            value = value[2..value.len-2];
+            self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}{{\"{s}\":\"{s}\"}},", .{self.currentFieldChars, self.lastKey, value});
+            _ = self.stack.pop();
+            try self.resetState();
+            return;
+        }
+
+
+        if (self.stack.items.len > 2 and (self.depth == 3 or eq(self.stack.items[2], "filters")) and self.chars.len > 1) {    
             if (self.isValue and (self.valueTerminatorChar == char
                     or (self.chars.len > 1
                         and self.isNonQuoted
                         and (self.valueTerminatorChar == char or char == 10)))
-                ) { 
-                if (!self.field_object_open) {
+                ) {                 
+                if (!self.is_filters_object and !self.is_filters_list) {
                     var parent_key = self.stack.items[2];
                     if(eq(parent_key, "filters")) {
                         parent_key = "filters__all";
                     }
-                    self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":{{", .{self.currentFieldChars, parent_key});
-                    self.field_object_open = true;
+                    self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":[{{", .{self.currentFieldChars, parent_key});
+                    self.is_filters_object = true;
                 }
                 var value = trimString(self.chars);
                 if (eq(self.lastKey, "value")) {
@@ -240,11 +282,10 @@ pub const Parser = struct {
                 while(self.chars[self.chars.len-1] == 32) {
                     self.chars = self.chars[0..self.chars.len-1];
                 }
-                if (self.chars[self.chars.len-1] == 110 and self.chars[self.chars.len - 2] == 92) {
+                while (self.chars[self.chars.len-1] == 110 and self.chars[self.chars.len - 2] == 92) {
                     self.chars = self.chars[0..self.chars.len-2];
                 }
             }
-            
             // maybe pop stack
             if (!isInList(self.lastKey, &objects) and self.stack.items.len > self.depth) {
                 
@@ -280,8 +321,12 @@ pub const Parser = struct {
                     }
                     else if (self.isBrackets) {
                         self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":[\"{s}\"],", .{self.currentFieldChars, last_closed_key, trimString(self.chars[0..self.chars.len-1])});
-                    } else {
+                    } else if (!self.isQuoted) {
                         self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentFieldChars, last_closed_key, trimString(self.chars)});
+                    } else {
+                        var value = trimString(self.chars);
+                        value = value[2..value.len-2];
+                        self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}\"{s}\":\"{s}\",", .{self.currentFieldChars, last_closed_key, value});
                     }
                     is_captured = true;
                 }
@@ -303,6 +348,7 @@ pub const Parser = struct {
             try self.resetState();
             return;
         }
+        
         if (!self.isQuoted and !self.isBrackets and !self.isNonQuoted and !self.isSql) {
             // curly braces open
             if (char == 123) {
@@ -321,8 +367,8 @@ pub const Parser = struct {
             // curly braces close
             if (char == 125) {
                 if (self.depth == 3) {
-                    self.field_object_open = false;
-                    self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}}},", .{self.currentFieldChars[0..self.currentFieldChars.len-1]});
+                    self.is_filters_object = false;
+                    self.currentFieldChars = try std.fmt.allocPrint(self.allocator, "{s}}}],", .{self.currentFieldChars[0..self.currentFieldChars.len-1]});
                 }
                 self.depth -= 1;
                 if (self.isVariable) {
@@ -431,9 +477,10 @@ pub const Parser = struct {
                 return;
             }
 
-            // key
+           
             if (!self.isValue and char == 58 and (self.chars[0] == 32 or self.chars[0] == 10 or self.chars.len == self.totalChars)) {
                 var key = trimString(self.chars[0..]);
+           
                 key = key[0..key.len-1];
                 try self.stack.append(key);
                 self.lastKey = key;
@@ -459,6 +506,8 @@ pub const Parser = struct {
 
             // first char of value is not quote or bracket
             if (self.isValue and char != 32) {
+                self.chars = &[_]u8{};
+                try self.addChar(char);
                 self.isSql = keyContainsSql(self.lastKey);
                 if (self.isSql) {
                     self.valueTerminatorChar = 59;
