@@ -170,16 +170,16 @@ pub const Tokenizer = struct {
             }
         }
         for (self.tokens.items) |token| {
-            print("{any}\n", .{token});
-            print("{s}\n", .{self.reader.lkml[token.range[0]..token.range[1]]});
+            // print("{any}\n", .{token});
+            try stdout.print("{s}\n", .{self.print_token(token)});
         }
     }
 
 
     fn handle_char(self: *Tokenizer, c: Char) ?Token {
-        print("{any}\n", .{c});
-        print("{any}\n", .{self.state});
-        if (self.state == State.SeekSqlValue) {
+        // print("{any}\n", .{c});
+        // print("{any}\n", .{self.state});
+        if (self.state == State.SeekSqlValue and c != Char.Colon) {
             return self.handle_state();
         }
         if (self.state == State.SeekValue and c == Char.Quote) {
@@ -187,11 +187,11 @@ pub const Tokenizer = struct {
             return self.handle_state();
         }
         if (self.state != State.ReadQuotedValue and (c == Char.Space or c == Char.NewLine)) {
-            print("Skip Space block\n", .{});
+            // print("Skip Space block\n", .{});
             return self.skip_space();
         }
         if (c == Char.Comment) {
-            print("Read Comment block\n", .{});
+            // print("Read Comment block\n", .{});
             self.set_state(State.ReadComment);
             return self.handle_state();
         }
@@ -221,7 +221,7 @@ pub const Tokenizer = struct {
                 return null;
             },
             .ReadKey => {
-                print("###ReadKey\n", .{});
+                // print("###ReadKey\n", .{});
                 return self.read_key();
             },
             .SeekValue => {
@@ -229,14 +229,14 @@ pub const Tokenizer = struct {
                 return null;
             },
             .SeekSqlValue => {
-                return null;
+                return self.read_sql_value();
             },
             .ReadUnquotedValue => {
-                print("###ReadUnquotedValue\n", .{});
+                // print("###ReadUnquotedValue\n", .{});
                 return self.read_unquoted_value();
             },
             .ReadQuotedValue => {
-                print("###ReadQuotedValue\n", .{});
+                // print("###ReadQuotedValue\n", .{});
                 return self.read_quoted_value();
             },
             .Done => {
@@ -309,6 +309,23 @@ pub const Tokenizer = struct {
         }
         var t = Token.init(TokenKind.Value, ValueKind.Quoted, Char.NotSpecial, self.reader.line);
         t.set_range(self.reader.range());
+        self.set_state(State.SeekKey);
+        return t;
+    }
+
+    fn read_sql_value(self: *Tokenizer) Token {
+        _ = self.skip_space();
+        self.reader.reset_range();
+        var c = self.curr_char;
+        while (!(c == Char.SemiColon and self.prev_char == Char.SemiColon)
+                and c != Char.Comment and !self.reader.finished()) {
+            c = try self.next_char();
+        }
+        var t = Token.init(TokenKind.Value, ValueKind.Sql, Char.NotSpecial, self.reader.line);
+        t.set_range(self.reader.range());
+        if (t.range[1]-t.range[0] > 1) {
+            t.range[1] -= 1;
+        }
         self.set_state(State.SeekKey);
         return t;
     }
