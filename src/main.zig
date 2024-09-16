@@ -170,7 +170,7 @@ pub const Tokenizer = struct {
             }
         }
         for (self.tokens.items) |token| {
-            // print("{any}\n", .{token});
+            try stdout.print("{any}\n", .{token});
             try stdout.print("{s}\n", .{self.print_token(token)});
         }
     }
@@ -179,7 +179,7 @@ pub const Tokenizer = struct {
     fn handle_char(self: *Tokenizer, c: Char) ?Token {
         // print("{any}\n", .{c});
         // print("{any}\n", .{self.state});
-        if (self.state == State.SeekSqlValue and c != Char.Colon) {
+        if (self.state == State.ReadSqlValue and c != Char.Colon) {
             return self.handle_state();
         }
         if (self.state == State.SeekValue and c == Char.Quote) {
@@ -187,11 +187,9 @@ pub const Tokenizer = struct {
             return self.handle_state();
         }
         if (self.state != State.ReadQuotedValue and (c == Char.Space or c == Char.NewLine)) {
-            // print("Skip Space block\n", .{});
             return self.skip_space();
         }
         if (c == Char.Comment) {
-            // print("Read Comment block\n", .{});
             self.set_state(State.ReadComment);
             return self.handle_state();
         }
@@ -201,6 +199,14 @@ pub const Tokenizer = struct {
         }
         if (self.state == State.SeekValue and c == Char.NotSpecial) {
             self.set_state(State.ReadUnquotedValue);
+            return self.handle_state();
+        }
+        if (c == Char.Comma
+            or c == Char.ListOpen
+            or c == Char.ListClose
+            or c == Char.ObjectOpen
+            or c == Char.ObjectClose) {
+            self.set_state(State.ReadControlChar);
             return self.handle_state();
         }
         return null;
@@ -228,8 +234,11 @@ pub const Tokenizer = struct {
                 // print("SeekValue\n", .{});
                 return null;
             },
-            .SeekSqlValue => {
+            .ReadSqlValue => {
                 return self.read_sql_value();
+            },
+            .ReadControlChar => {
+                return self.read_control_char();
             },
             .ReadUnquotedValue => {
                 // print("###ReadUnquotedValue\n", .{});
@@ -282,7 +291,7 @@ pub const Tokenizer = struct {
         if (std.mem.eql(u8, "sql", printed)
             or (printed.len >= 4 and std.mem.eql(u8, "sql_", printed[0..4]))
             ) {
-            self.set_state(State.SeekSqlValue);
+            self.set_state(State.ReadSqlValue);
         } else {
             self.set_state(State.SeekValue);
         }
@@ -330,6 +339,19 @@ pub const Tokenizer = struct {
         return t;
     }
 
+    fn read_control_char(self: *Tokenizer) Token {
+        self.reader.reset_range();
+        _ = try self.next_char();
+        var t = Token.init(TokenKind.Control, ValueKind.UnQuoted, self.curr_char, self.reader.line);
+        t.set_range(self.reader.range());
+        if (self.curr_char == Char.Comma) {
+            self.set_state(State.SeekValue);
+        } else {
+            self.set_state(State.SeekKey);
+        }
+        return t;
+    }
+
     fn skip_space(self: *Tokenizer) ?Token {
         var c = self.curr_char;
         while (!self.reader.finished() and (c == Char.Space or c == Char.NewLine)) {
@@ -365,10 +387,11 @@ pub const State = enum {
     SeekKey,
     ReadKey,
     SeekValue,
-    SeekSqlValue,
+    ReadSqlValue,
     ReadUnquotedValue,
     ReadQuotedValue,
     ReadComment,
+    ReadControlChar,
     NotStarted,
 };
 
