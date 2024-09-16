@@ -20,11 +20,8 @@ pub const Reader = struct {
     }
 
     pub fn next(self: *Reader) u8 {
-        if (!self.finished()) {
-            self.i += 1;
-            return self.curr();
-        }
-        return 0;
+        self.i += 1;
+        return self.curr();
     }
 
     pub fn finished(self: *Reader) bool {
@@ -77,14 +74,18 @@ pub const TokenKind = enum {
 
 pub const Token = struct {
     kind: TokenKind,
+    value_kind: ValueKind,
     char: Char,
     range: [2]u32,
+    line: u32,
 
-    pub fn init(kind: TokenKind, char: Char) Token {
+    pub fn init(kind: TokenKind, value_kind: ValueKind, char: Char, line: u32) Token {
         return Token{
             .kind = kind,
+            .value_kind = value_kind,
             .char = char,
             .range = [2]u32{0,0},
+            .line = line
         };
     }
 
@@ -107,6 +108,7 @@ pub const Char = enum {
     Comment,
     NotSpecial,
     EOF,
+    SOF,
 };
 
 
@@ -114,14 +116,19 @@ pub const Tokenizer = struct {
     allocator: *Allocator,
     reader: Reader,
     state: State,
+    curr_char: Char,
+    prev_char: Char,
     previous_state: State,
     tokens: std.ArrayList(Token),
 
     pub fn init(allocator: *Allocator, reader: Reader) !Tokenizer {
+
         return Tokenizer{
             .allocator =  allocator,
             .reader = reader,
             .state = State.SeekKey,
+            .curr_char = Char.SOF,
+            .prev_char = Char.SOF,
             .previous_state = State.NotStarted,
             .tokens = std.ArrayList(Token).init(allocator.*),
         };
@@ -149,7 +156,7 @@ pub const Tokenizer = struct {
     }
 
     pub fn tokenize(self: *Tokenizer) !void {
-        var c = try self.curr_char();
+        var c = try self.next_char();
         while(!self.reader.finished()) {
             const i = self.reader.i;
             const t = self.handle_char(c);
@@ -159,7 +166,7 @@ pub const Tokenizer = struct {
             if (i == self.reader.i) {
                 c = try self.next_char();
             } else {
-                c = try self.curr_char();
+                c = self.curr_char;
             }
         }
         for (self.tokens.items) |token| {
@@ -171,14 +178,29 @@ pub const Tokenizer = struct {
 
     fn handle_char(self: *Tokenizer, c: Char) ?Token {
         print("{any}\n", .{c});
-        if (self.state != State.ReadValue and (c == Char.Space or c == Char.NewLine)) {
-            print("Skip Space block\n", .{});
-            self.set_state(State.SkipSpace);
+        print("{any}\n", .{self.state});
+        if (self.state == State.SeekSqlValue) {
             return self.handle_state();
         }
-        if (self.state != State.ReadComment and c == Char.Comment) {
+        if (self.state == State.SeekValue and c == Char.Quote) {
+            self.set_state(State.ReadQuotedValue);
+            return self.handle_state();
+        }
+        if (self.state != State.ReadQuotedValue and (c == Char.Space or c == Char.NewLine)) {
+            print("Skip Space block\n", .{});
+            return self.skip_space();
+        }
+        if (c == Char.Comment) {
             print("Read Comment block\n", .{});
             self.set_state(State.ReadComment);
+            return self.handle_state();
+        }
+        if (self.state == State.SeekKey and c == Char.NotSpecial) {
+            self.set_state(State.ReadKey);
+            return self.handle_state();
+        }
+        if (self.state == State.SeekValue and c == Char.NotSpecial) {
+            self.set_state(State.ReadUnquotedValue);
             return self.handle_state();
         }
         return null;
@@ -189,58 +211,59 @@ pub const Tokenizer = struct {
             self.previous_state = self.state;
         }
         self.state = state;
-        print("{any}\n", .{self.state});
+        // print("{any}\n", .{self.state});
     }
 
     fn handle_state(self: *Tokenizer) ?Token {
         const t: ?Token = switch (self.state) {
             .SeekKey => {
-                print("SeekKey\n", .{});
-                return self.seek_key();
+                // print("SeekKey\n", .{});
+                return null;
             },
             .ReadKey => {
-                print("ReadKey\n", .{});
+                print("###ReadKey\n", .{});
                 return self.read_key();
             },
             .SeekValue => {
-                print("SeekValue\n", .{});
+                // print("SeekValue\n", .{});
                 return null;
             },
-            .ReadValue => {
-                print("ReadValue\n", .{});
+            .SeekSqlValue => {
                 return null;
+            },
+            .ReadUnquotedValue => {
+                print("###ReadUnquotedValue\n", .{});
+                return self.read_unquoted_value();
+            },
+            .ReadQuotedValue => {
+                print("###ReadQuotedValue\n", .{});
+                return self.read_quoted_value();
             },
             .Done => {
-                print("Done\n", .{});
+                // print("Done\n", .{});
                 return null;
             },
             .ReadComment => {
-                print("ReadComment\n", .{});
+                // print("ReadComment\n", .{});
                 return self.read_comment();
             },
             .NotStarted => {
-                print("NotStarted\n", .{});
-                return null;
-            },
-            .SkipSpace => {
-                print("SkipSpace\n", .{});
-                self.skip_space();
+                // print("NotStarted\n", .{});
                 return null;
             },
         };
         return t;
     }
 
-    fn curr_char(self: *Tokenizer) !Char {
-        return self.char_type(self.reader.curr());
-    }
-
     fn next_char(self: *Tokenizer) !Char {
-        return self.char_type(self.reader.next());
+        const char = self.char_type(self.reader.next());
+        self.prev_char = self.curr_char;
+        self.curr_char = char;
+        return char;
     }
 
     fn seek_key(self: *Tokenizer) ?Token {
-        const c = try self.curr_char();
+        const c = self.curr_char;
         if (c == Char.NotSpecial) {
             self.set_state(State.ReadKey);
         }
@@ -249,34 +272,69 @@ pub const Tokenizer = struct {
 
     fn read_key(self: *Tokenizer) Token {
         self.reader.reset_range();
-        var c = try self.curr_char();
-        while (c == Char.NotSpecial and c != Char.Colon) {
+        var c = self.curr_char;
+        while (c == Char.NotSpecial and c != Char.Colon and !self.reader.finished()) {
             c = try self.next_char();
         }
-        var t = Token.init(TokenKind.Value, Char.Comment);
+        var t = Token.init(TokenKind.Key, ValueKind.UnQuoted, Char.NotSpecial, self.reader.line);
         t.set_range(self.reader.range());
-        self.set_state(State.ReadValue);
+        const printed = self.print_token(t);
+        if (std.mem.eql(u8, "sql", printed)
+            or (printed.len >= 4 and std.mem.eql(u8, "sql_", printed[0..4]))
+            ) {
+            self.set_state(State.SeekSqlValue);
+        } else {
+            self.set_state(State.SeekValue);
+        }
         return t;
     }
 
-    fn skip_space(self: *Tokenizer) void {
-        var c = try self.curr_char();
+    fn read_unquoted_value(self: *Tokenizer) Token {
+        self.reader.reset_range();
+        var c = self.curr_char;
+        while (c == Char.NotSpecial and c != Char.Space and !self.reader.finished()) {
+            c = try self.next_char();
+        }
+        var t = Token.init(TokenKind.Value, ValueKind.UnQuoted, Char.NotSpecial, self.reader.line);
+        t.set_range(self.reader.range());
+        self.set_state(State.SeekKey);
+        return t;
+    }
+
+    fn read_quoted_value(self: *Tokenizer) Token {
+        self.reader.reset_range();
+        var c = try self.next_char();
+        while (c != Char.Quote and c != Char.Comment and !self.reader.finished()) {
+            c = try self.next_char();
+        }
+        var t = Token.init(TokenKind.Value, ValueKind.Quoted, Char.NotSpecial, self.reader.line);
+        t.set_range(self.reader.range());
+        self.set_state(State.SeekKey);
+        return t;
+    }
+
+    fn skip_space(self: *Tokenizer) ?Token {
+        var c = self.curr_char;
         while (!self.reader.finished() and (c == Char.Space or c == Char.NewLine)) {
             c = try self.next_char();
         }
-        // self.set_state(self.previous_state);
+        return null;
     }
 
     pub fn read_comment(self: *Tokenizer) Token {
         self.reader.reset_range();
-        var c = try self.curr_char();
+        var c = self.curr_char;
         while (!self.reader.finished() and c != Char.NewLine) {
             c = try self.next_char();
         }
-        var t = Token.init(TokenKind.Value, Char.Comment);
+        var t = Token.init(TokenKind.Value, ValueKind.UnQuoted, Char.Comment, self.reader.line);
         t.set_range(self.reader.range());
-        self.set_state(self.previous_state);
+        self.set_state(State.SeekKey);
         return t;
+    }
+
+    pub fn print_token(self: *Tokenizer, token: Token) []u8 {
+        return self.reader.lkml[token.range[0]..token.range[1]];
     }
 
     pub fn deinit(self: *Tokenizer) void {
@@ -290,10 +348,11 @@ pub const State = enum {
     SeekKey,
     ReadKey,
     SeekValue,
-    ReadValue,
+    SeekSqlValue,
+    ReadUnquotedValue,
+    ReadQuotedValue,
     ReadComment,
     NotStarted,
-    SkipSpace,
 };
 
 pub fn main() !void {
