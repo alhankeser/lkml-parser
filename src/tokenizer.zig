@@ -18,6 +18,7 @@ pub const Tokenizer = struct {
     prev_char: Char,
     previous_state: State,
     tokens: std.ArrayList(Token),
+    token_index: u32,
 
     pub fn init(allocator: *Allocator, reader: Reader) !Tokenizer {
         return Tokenizer{
@@ -28,6 +29,7 @@ pub const Tokenizer = struct {
             .prev_char = Char.SOF,
             .previous_state = State.NotStarted,
             .tokens = std.ArrayList(Token).init(allocator.*),
+            .token_index = 0,
         };
     }
 
@@ -72,9 +74,10 @@ pub const Tokenizer = struct {
             }
         }
         // for (self.tokens.items) |token| {
-            // try stdout.print("{any}:", .{token.kind});
-            // // try stdout.print("{any}:", .{token.range});
-            // try stdout.print("{s}\n", .{self.print_token(token)});
+        //     // try stdout.print("{any}:", .{token.kind});
+        //     // try stdout.print("{any}:", .{token.range});
+        //     // try stdout.print("{s}\n", .{self.print_token(token)});
+        //     try stdout.print("{any}\n", .{token});
         // }
     }
 
@@ -230,7 +233,6 @@ pub const Tokenizer = struct {
 
     fn read_control_char(self: *Tokenizer) Token {
         self.reader.reset_range();
-        _ = try self.next_char();
         var t = Token.init(TokenKind.Control, ValueKind.UnQuoted, self.curr_char, self.reader.line);
         t.set_range(self.reader.range());
         self.set_state(State.SeekKey);
@@ -263,6 +265,27 @@ pub const Tokenizer = struct {
         t.set_range(self.reader.range());
         self.set_state(State.SeekKey);
         return t;
+    }
+
+    pub fn next(self: *Tokenizer) ?Token {
+        // This is here so that while loops starting with .next() will start with the first token
+        if (self.token_index == 0) {
+            const t = self.tokens.items[self.token_index];
+            self.token_index += 1;
+            return t;
+        }
+        self.token_index += 1;
+        if (self.token_index < self.tokens.items.len) {
+            return self.tokens.items[self.token_index];
+        }
+        return null;
+    }
+
+    pub fn previous(self: *Tokenizer) ?Token {
+        if (self.token_index - 1 >= 0) {
+            return self.tokens.items[self.token_index - 1];
+        }
+        return null;
     }
 
     pub fn print_token(self: *Tokenizer, token: Token) []u8 {

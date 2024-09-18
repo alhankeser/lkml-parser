@@ -43,7 +43,11 @@ pub const Reader = struct {
     }
 
     pub fn range(self: *Reader) [2]u32 {
-        return [2]u32{ self.start, self.i };
+        var i = self.i;
+        if (self.start == i) {
+            i += 1;
+        }
+        return [2]u32{ self.start, i };
     }
 
     pub fn chars(self: *Reader) []u8 {
