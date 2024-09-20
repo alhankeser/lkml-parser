@@ -12,105 +12,183 @@ const Token = @import("token.zig").Token;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 // const Parser = @import("parser.zig").Parser;
 
+
 pub const Node = struct {
     allocator: *Allocator,
-    depth: usize,
-    key: ?*Token,
-    value: ?*Token,
-    children: std.ArrayList(*Node),
+    name: []u8,
+    children: std.StringArrayHashMap(std.ArrayList(Node)),
 
-    pub fn init(allocator: *Allocator, depth: usize, key: ?*Token, value: ?*Token) Node {
+    pub fn init(allocator: *Allocator) Node {
         return Node{
             .allocator = allocator,
-            .depth = depth,
-            .key = key,
-            .value = value,
-            .children = std.ArrayList(*Node).init(allocator.*),
+            .name = &[_]u8{},
+            .children = std.StringArrayHashMap(std.ArrayList(Node)).init(allocator.*),
         };
     }
 
-    pub fn addChild(self: *Node, node: *Node) !void {
-        try self.children.append(node);
+    pub fn set_name(self: *Node, name: []u8) void {
+        self.name = try std.fmt.allocPrint(self.allocator.*, "{s}", .{name});
     }
 
-    pub fn create(self: *Node, depth: usize, key: ?*Token, value: ?*Token) Node {
-        const node = Node.init(self.allocator, depth, key, value);
-        return node;
-    }
-
-    pub fn deinit(self: *Node,) void {
-        for (self.children.items) |child_node| {
-            child_node.deinit();
-            self.allocator.destroy(child_node);
-        }
-        self.children.deinit();
+    pub fn add_child(self: *Node, child: Node) !void {
+        try self.children.put(child);
     }
 };
+
 
 pub const Parser = struct {
     allocator: *Allocator,
     stack: std.ArrayList(*const Token),
-    node: *Node,
+    depth: u8,
     json: []u8,
+    root: std.StringArrayHashMap(std.ArrayList([]const u8)),
+    view: std.StringArrayHashMap(std.ArrayList([]const u8)),
+    field: std.StringArrayHashMap(std.ArrayList([]const u8)),
+    param: std.StringArrayHashMap(std.ArrayList([]const u8)),
     
     pub fn init(allocator: *Allocator,) !Parser {
-        var node = Node.init(allocator, 0, null, null);
         return Parser{
             .allocator = allocator,
             .stack = std.ArrayList(*const Token).init(allocator.*),
+            .depth = 0,
             .json = &[_]u8{},
-            .node = &node,
+            .root = std.StringArrayHashMap(std.ArrayList([]const u8)).init(allocator.*),
+            .view = std.StringArrayHashMap(std.ArrayList([]const u8)).init(allocator.*),
+            .field =  std.StringArrayHashMap(std.ArrayList([]const u8)).init(allocator.*),
+            .param =  std.StringArrayHashMap(std.ArrayList([]const u8)).init(allocator.*),
         };
     }
- 
-    pub fn parse(self: *Parser, tokenizer: *Tokenizer) ![]u8 {
-        var key: Token = undefined;
-        var value: Token = undefined;
-        while (tokenizer.next()) |token| {
-            // print("{any}", .{token});
 
-            if (token.kind == TokenKind.Key) {
-                key = token;
+    fn stringify_key_value(self: *Parser, key: []u8, value: []u8) ![]u8 {
+        return try std.fmt.allocPrint(self.allocator.*, "{s}:{s}", .{key, value});
+    }
+
+    fn get_existing_map_arr_or_create(self: *Parser, map:*std.StringArrayHashMap(std.ArrayList([]const u8)), key: []const u8) std.ArrayList([]const u8) {
+        const arr_optional = map.get(key);
+        if(arr_optional) |arr| {
+            return arr;
+        } else {
+            return std.ArrayList([]const u8).init(self.allocator.*);
+        }
+    }
+
+    fn add_simple_key_value(self: *Parser, map: *std.StringArrayHashMap(std.ArrayList([]const u8)), key: []const u8, value: []const u8) !void {
+        var arr = self.get_existing_map_arr_or_create(map, key);
+        try arr.append(value);
+        try map.put(key, arr);
+    }
+
+    fn create_named_object(self: *Parser, map: *std.StringArrayHashMap(std.ArrayList([]const u8)), key: []const u8, value: []const u8) !void {
+        // Create object
+        map.clearRetainingCapacity();
+        var new_arr = std.ArrayList([]const u8).init(self.allocator.*);
+        try new_arr.append(value);
+        try map.put("name", new_arr);
+
+        // Add to parent
+        const parent = try self.depth_map(self.depth - 1);
+        var arr = self.get_existing_map_arr_or_create(map, key);
+        try arr.append(value);
+        try parent.put(key, arr);
+    }
+
+    fn depth_map(self: *Parser, depth: u8) !*std.StringArrayHashMap(std.ArrayList([]const u8)) {
+        return switch (depth) {
+            0 => &self.root,
+            1 => &self.view,
+            2 => &self.field,
+            3 => &self.param,
+            else => &self.root
+        };
+    }
+
+    fn create_hashmap(self: *Parser) !std.StringArrayHashMap(std.ArrayList([]const u8)) {
+        const map = std.StringArrayHashMap(std.ArrayList([]const u8)).init(self.allocator.*);
+        return map;
+    }
+
+    pub fn parse(self: *Parser, tokenizer: *Tokenizer) ![]u8 {
+
+        var root = try self.create_hashmap();
+        // var view: std.StringArrayHashMap(std.ArrayList([]const u8)) = undefined;
+        // var field: std.StringArrayHashMap(std.ArrayList([]const u8)) = undefined;
+        // var param: std.StringArrayHashMap(std.ArrayList([]const u8)) = undefined;
+
+        while (tokenizer.next()) |token1| {
+            
+            // var str: []u8 = &[_]u8{};
+
+            var token2_opt: ?Token = null;
+            var token2: Token = undefined;
+
+            var token3_opt: ?Token = null;
+            var token3: Token = undefined;
+
+            // print("{s}:{any}\n", .{tokenizer.stringify(token1), token1.kind});
+            
+            if (token1.char == Char.Comment) {
+                continue;
             }
 
-            if (token.kind == TokenKind.Value) {
-                value = token;
+            // TOKEN 1
+            if (token1.kind == TokenKind.Key) {
+                token2_opt = tokenizer.next();
+            }
+
+            // TOKEN 2
+            if (token2_opt) |t2| {
+                token2 = t2;
+                token3_opt = tokenizer.peek();
+            }
+            // TOKEN 3
+            if (token3_opt) |t3| {
+                token3 = t3;
             }
             
-            // Open List/Object
-            if (token.kind == TokenKind.Control
-                and (token.char == Char.ListOpen or token.char == Char.ObjectOpen)) {
-                // print("{any}", .{token});
-                // var node = Node.init(self.allocator, self.stack.items.len, &key, &value);
-                if (@TypeOf(key) == Token) {
-                    print("{any}\n", .{key});
-                    var node = self.node.create(self.stack.items.len, &key, &value);
-                    try self.node.addChild(&node);
-                    key = undefined;
-                    value = undefined;
-                }
-                if (tokenizer.previous()) |previous_token| {
-                    try self.stack.append(&previous_token);
-                }
+            // Simple key:value
+            if (token2.kind == TokenKind.Value and token3.kind == TokenKind.Key) {
+                // const map = try self.depth_map(self.depth);
+                // var map = &root;
+                try self.add_simple_key_value(&root, tokenizer.stringify(token1), tokenizer.stringify(token2));
+                continue;
             }
 
-            // Close List/Object
-            // if (token.kind == TokenKind.Control
-            //     and (token.char == Char.ListClose or token.char == Char.ObjectClose)) {
-            //     // print("{any}", .{token});
-            //     _ = self.stack.pop();
+            // Key:value, followed by a control char
+            // if (token2.kind == TokenKind.Value and token3.kind == TokenKind.Control) {
+            //     _ = switch (token3.char) {
+            //         Char.ObjectOpen => {
+            //             self.depth += 1;
+            //             const map = try self.depth_map(self.depth);
+            //             try self.create_named_object(map, tokenizer.stringify(token1), tokenizer.stringify(token2));
+            //         }, // create param/field/view, increase depth
+
+            // // //         Char.Comma => //add to param
+            // // //         Char.ListClose => //close param, add to field, reduce depth
+            // //         // Char.ObjectClose => // close param/field/view, add to parent, reduce depth
+            //         else => null
+            //     };
             // }
 
-            // for (self.node.children.items) |node| {
-            //     print("{any}\n", .{node.*.key});
+            // if (token2.kind == TokenKind.Control) {
+            //     // A key followed by control
             // }
-
-            // try self.appendToJson(tokenizer.print_token(token));
         }
-        try stdout.print("stack_count:{any}\n", .{self.stack.items.len});
-        for (self.stack.items) |token| {
-            try stdout.print("{s}\n", .{tokenizer.print_token(token.*)});
+        // try stdout.print("{any}", .{root.children});
+        var it = root.iterator();
+        while (it.next()) |item| {
+            print("{s}:", .{item.key_ptr.*});
+            for (item.value_ptr.items) |arr_item| {
+                print("{s}\n", .{arr_item});
+            }
         }
+        // var it2 = self.view.iterator();
+        // while (it2.next()) |item| {
+        //     print("{s}:", .{item.key_ptr.*});
+        //     for (item.value_ptr.items) |arr_item| {
+        //         print("{s}\n", .{arr_item});
+        //     }
+        // }
+        try stdout.print("{s}", .{self.json});
         return self.json;
     }
 

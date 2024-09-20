@@ -18,7 +18,7 @@ pub const Tokenizer = struct {
     prev_char: Char,
     previous_state: State,
     tokens: std.ArrayList(Token),
-    token_index: u32,
+    token_idx: i32,
 
     pub fn init(allocator: *Allocator, reader: Reader) !Tokenizer {
         return Tokenizer{
@@ -29,7 +29,7 @@ pub const Tokenizer = struct {
             .prev_char = Char.SOF,
             .previous_state = State.NotStarted,
             .tokens = std.ArrayList(Token).init(allocator.*),
-            .token_index = 0,
+            .token_idx = -1,
         };
     }
 
@@ -76,7 +76,7 @@ pub const Tokenizer = struct {
         // for (self.tokens.items) |token| {
         //     // try stdout.print("{any}:", .{token.kind});
         //     // try stdout.print("{any}:", .{token.range});
-        //     // try stdout.print("{s}\n", .{self.print_token(token)});
+        //     // try stdout.print("{s}\n", .{self.stringify(token)});
         //     try stdout.print("{any}\n", .{token});
         // }
     }
@@ -155,7 +155,6 @@ pub const Tokenizer = struct {
                 return self.read_comment();
             },
             .NotStarted => {
-                // print("NotStarted\n", .{});
                 return null;
             },
         };
@@ -172,13 +171,12 @@ pub const Tokenizer = struct {
     fn read_key(self: *Tokenizer) Token {
         self.reader.reset_range();
         var c = self.curr_char;
-        // print("---->{any}\n", .{c});
         while (c == Char.NotSpecial and c != Char.Colon and !self.reader.finished()) {
             c = try self.next_char();
         }
         var t = Token.init(TokenKind.Key, ValueKind.UnQuoted, Char.NotSpecial, self.reader.line);
         t.set_range(self.reader.range());
-        const printed = self.print_token(t);
+        const printed = self.stringify(t);
         if (std.mem.eql(u8, "sql", printed)
             or (printed.len >= 4 and std.mem.eql(u8, "sql_", printed[0..4]))
             ) {
@@ -248,7 +246,7 @@ pub const Tokenizer = struct {
     }
 
     fn trim_space(self: *Tokenizer, token: Token) Token {
-        const content = self.print_token(token);
+        const content = self.stringify(token);
         const trimmed = std.mem.trim(u8, content, "\n ");
         var t = token;
         t.set_range(.{token.range[0], @intCast(token.range[0]+trimmed.len)});
@@ -267,28 +265,37 @@ pub const Tokenizer = struct {
         return t;
     }
 
+    fn token_index(self: *Tokenizer) u32 {
+        const i: u32 = @intCast(self.token_idx);
+        return i;
+    }
+
     pub fn next(self: *Tokenizer) ?Token {
-        // This is here so that while loops starting with .next() will start with the first token
-        if (self.token_index == 0) {
-            const t = self.tokens.items[self.token_index];
-            self.token_index += 1;
-            return t;
+        self.token_idx += 1;
+        if (self.token_idx < self.tokens.items.len) {
+            const i = self.token_index();
+            return self.tokens.items[i];
         }
-        self.token_index += 1;
-        if (self.token_index < self.tokens.items.len) {
-            return self.tokens.items[self.token_index];
+        return null;
+    }
+
+    pub fn peek(self: *Tokenizer) ?Token {
+        const i = self.token_index();
+        if (i + 1 < self.tokens.items.len) {
+            return self.tokens.items[i + 1];
         }
         return null;
     }
 
     pub fn previous(self: *Tokenizer) ?Token {
-        if (self.token_index - 1 >= 0) {
-            return self.tokens.items[self.token_index - 1];
+        const i = self.token_index();
+        if (i - 1 >= 0) {
+            return self.tokens.items[i - 1];
         }
         return null;
     }
 
-    pub fn print_token(self: *Tokenizer, token: Token) []u8 {
+    pub fn stringify(self: *Tokenizer, token: Token) []u8 {
         return self.reader.lkml[token.range[0]..token.range[1]];
     }
 
