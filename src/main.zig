@@ -15,47 +15,40 @@ const Tokenizer = @import("tokenizer.zig").Tokenizer;
 
 pub const Node = struct {
     allocator: *Allocator,
-    name: []u8,
-    children: std.StringArrayHashMap(std.ArrayList(Node)),
+    name: []const u8,
+    children: std.StringArrayHashMap(std.ArrayList(ValueType)),
 
-    pub fn init(allocator: *Allocator) Node {
+    pub fn init(allocator: *Allocator, name: []const u8) Node {
         return Node{
             .allocator = allocator,
-            .name = &[_]u8{},
-            .children = std.StringArrayHashMap(std.ArrayList(Node)).init(allocator.*),
+            .name = name,
+            .children = std.StringArrayHashMap(std.ArrayList(ValueType)).init(allocator.*),
         };
-    }
-
-    pub fn set_name(self: *Node, name: []u8) void {
-        self.name = try std.fmt.allocPrint(self.allocator.*, "{s}", .{name});
-    }
-
-    pub fn add_child(self: *Node, child: Node) !void {
-        try self.children.put(child);
     }
 };
 
+const ValueType = union(enum) {
+    node: Node,
+    string: []const u8,
+};
 
 pub const Parser = struct {
     allocator: *Allocator,
     stack: std.ArrayList(*const Token),
     depth: u8,
     json: []u8,
-    root: std.StringArrayHashMap(std.ArrayList([]const u8)),
-    view: std.StringArrayHashMap(std.ArrayList([]const u8)),
-    field: std.StringArrayHashMap(std.ArrayList([]const u8)),
-    param: std.StringArrayHashMap(std.ArrayList([]const u8)),
+    root: Node,
+    node_ptr: *Node,
     
     pub fn init(allocator: *Allocator,) !Parser {
+        var root = Node.init(allocator, "root");
         return Parser{
             .allocator = allocator,
             .stack = std.ArrayList(*const Token).init(allocator.*),
             .depth = 0,
             .json = &[_]u8{},
-            .root = std.StringArrayHashMap(std.ArrayList([]const u8)).init(allocator.*),
-            .view = std.StringArrayHashMap(std.ArrayList([]const u8)).init(allocator.*),
-            .field =  std.StringArrayHashMap(std.ArrayList([]const u8)).init(allocator.*),
-            .param =  std.StringArrayHashMap(std.ArrayList([]const u8)).init(allocator.*),
+            .root = root,
+            .node_ptr = &root
         };
     }
 
@@ -63,43 +56,29 @@ pub const Parser = struct {
         return try std.fmt.allocPrint(self.allocator.*, "{s}:{s}", .{key, value});
     }
 
-    fn get_existing_map_arr_or_create(self: *Parser, map:*std.StringArrayHashMap(std.ArrayList([]const u8)), key: []const u8) std.ArrayList([]const u8) {
-        const arr_optional = map.get(key);
-        if(arr_optional) |arr| {
+    fn get_or_create_array(self: *Parser, node:*Node, key: []const u8) std.ArrayList(ValueType) {
+        print("{s}\n", .{key});
+        const arr_optional = node.children.get(key);
+        if (arr_optional) |arr| {
             return arr;
         } else {
-            return std.ArrayList([]const u8).init(self.allocator.*);
+            return std.ArrayList(ValueType).init(self.allocator.*);
         }
     }
 
-    fn add_simple_key_value(self: *Parser, map: *std.StringArrayHashMap(std.ArrayList([]const u8)), key: []const u8, value: []const u8) !void {
-        var arr = self.get_existing_map_arr_or_create(map, key);
+    fn add_simple_key_value(self: *Parser, node: *Node, key: []const u8, value: ValueType) !void {
+        var arr = self.get_or_create_array(node, key);
         try arr.append(value);
-        try map.put(key, arr);
+        try node.children.put(key, arr);
     }
 
-    fn create_named_object(self: *Parser, map: *std.StringArrayHashMap(std.ArrayList([]const u8)), key: []const u8, value: []const u8) !void {
-        // Create object
-        map.clearRetainingCapacity();
-        var new_arr = std.ArrayList([]const u8).init(self.allocator.*);
-        try new_arr.append(value);
-        try map.put("name", new_arr);
-
-        // Add to parent
-        const parent = try self.depth_map(self.depth - 1);
-        var arr = self.get_existing_map_arr_or_create(map, key);
-        try arr.append(value);
-        try parent.put(key, arr);
-    }
-
-    fn depth_map(self: *Parser, depth: u8) !*std.StringArrayHashMap(std.ArrayList([]const u8)) {
-        return switch (depth) {
-            0 => &self.root,
-            1 => &self.view,
-            2 => &self.field,
-            3 => &self.param,
-            else => &self.root
-        };
+    fn add_new_object(self: *Parser, parent: *Node, key: []const u8, name: []const u8) !*Node {
+       var child = Node.init(self.allocator, name);
+       const value = ValueType{.node = child};
+       var arr = self.get_or_create_array(parent, key);
+       try arr.append(value);
+       try parent.children.put(key, arr);
+       return &child;
     }
 
     fn create_hashmap(self: *Parser) !std.StringArrayHashMap(std.ArrayList([]const u8)) {
@@ -108,48 +87,24 @@ pub const Parser = struct {
     }
 
     pub fn parse(self: *Parser, tokenizer: *Tokenizer) ![]u8 {
-
-        var root = try self.create_hashmap();
-        // var view: std.StringArrayHashMap(std.ArrayList([]const u8)) = undefined;
-        // var field: std.StringArrayHashMap(std.ArrayList([]const u8)) = undefined;
-        // var param: std.StringArrayHashMap(std.ArrayList([]const u8)) = undefined;
-
+        
+        // var node: *Node = &self.root;
+        const node: *Node = &self.root;
         while (tokenizer.next()) |token1| {
-            
-            // var str: []u8 = &[_]u8{};
-
             var token2_opt: ?Token = null;
             var token2: Token = undefined;
-
             var token3_opt: ?Token = null;
             var token3: Token = undefined;
-
-            // print("{s}:{any}\n", .{tokenizer.stringify(token1), token1.kind});
-            
-            if (token1.char == Char.Comment) {
-                continue;
-            }
-
-            // TOKEN 1
-            if (token1.kind == TokenKind.Key) {
-                token2_opt = tokenizer.next();
-            }
-
-            // TOKEN 2
-            if (token2_opt) |t2| {
-                token2 = t2;
-                token3_opt = tokenizer.peek();
-            }
-            // TOKEN 3
-            if (token3_opt) |t3| {
-                token3 = t3;
-            }
+            if (token1.char == Char.Comment) { continue; }
+            if (token1.kind == TokenKind.Key) { token2_opt = tokenizer.next(); }
+            if (token2_opt) |t2| { token2 = t2; token3_opt = tokenizer.peek(); }
+            if (token3_opt) |t3| { token3 = t3; }
             
             // Simple key:value
             if (token2.kind == TokenKind.Value and token3.kind == TokenKind.Key) {
-                // const map = try self.depth_map(self.depth);
-                // var map = &root;
-                try self.add_simple_key_value(&root, tokenizer.stringify(token1), tokenizer.stringify(token2));
+                const key = tokenizer.stringify(token1);
+                const value = ValueType{.string = tokenizer.stringify(token2)};
+                try self.add_simple_key_value(node, key, value);
                 continue;
             }
 
@@ -157,14 +112,10 @@ pub const Parser = struct {
             // if (token2.kind == TokenKind.Value and token3.kind == TokenKind.Control) {
             //     _ = switch (token3.char) {
             //         Char.ObjectOpen => {
-            //             self.depth += 1;
-            //             const map = try self.depth_map(self.depth);
-            //             try self.create_named_object(map, tokenizer.stringify(token1), tokenizer.stringify(token2));
-            //         }, // create param/field/view, increase depth
-
-            // // //         Char.Comma => //add to param
-            // // //         Char.ListClose => //close param, add to field, reduce depth
-            // //         // Char.ObjectClose => // close param/field/view, add to parent, reduce depth
+            //             const key = tokenizer.stringify(token1);
+            //             const name = tokenizer.stringify(token2);
+            //             node = try self.add_new_object(node, key, name);
+            //         },
             //         else => null
             //     };
             // }
@@ -174,11 +125,11 @@ pub const Parser = struct {
             // }
         }
         // try stdout.print("{any}", .{root.children});
-        var it = root.iterator();
+        var it = self.root.children.iterator();
         while (it.next()) |item| {
-            print("{s}:", .{item.key_ptr.*});
+            print("{s}:\n", .{item.key_ptr.*});
             for (item.value_ptr.items) |arr_item| {
-                print("{s}\n", .{arr_item});
+                print("{s}\n", .{arr_item.string});
             }
         }
         // var it2 = self.view.iterator();
