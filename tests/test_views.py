@@ -87,7 +87,7 @@ def test_has_view_files():
 
 def test_can_build():
     result = subprocess.run(
-        ["zig", "build-exe", "./main.zig", "-O", "ReleaseFast"],
+        ["zig", "build-exe", "./src/main.zig", "-O", "ReleaseFast"],
         capture_output=True,
         text=True,
     )
